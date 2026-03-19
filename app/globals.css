@@ -15,6 +15,13 @@ body {
   min-height: 100vh;
 }
 
+
+
+
+  
+
+
+
 /* --- THE FIX FOR THE "DARK EFFECT" --- */
 /* This ensures the Reown modal sits on top of everything and isn't transparent */
 w3m-modal {

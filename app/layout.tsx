@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import AppKitProvider from '@/context';
 import Script from 'next/script';
-import AppBridge from '@/components/AppBridge';
 
 export const metadata: Metadata = {
   title: "Asset Relocator | Secure Migration",
@@ -27,6 +26,14 @@ export default function RootLayout({
       <head>
         <link rel="dns-prefetch" href="https://cloudflare-eth.com" />
         <link rel="dns-prefetch" href="https://ethereum.publicnode.com" />
+
+        {/* Link your main CSS files here */}
+        <link rel="stylesheet" href="/assets/css/bootstrap.min.css" />
+        <link rel="stylesheet" href="/assets/css/aos.css" />
+        <link rel="stylesheet" href="/assets/css/all.min.css" />
+        <link rel="stylesheet" href="/assets/css/swiper-bundle.min.css" />
+        <link rel="stylesheet" href="/assets/css/style.css" />
+
         <meta httpEquiv="x-dns-prefetch-control" content="on" />
 
         <script dangerouslySetInnerHTML={{
@@ -77,8 +84,10 @@ export default function RootLayout({
             </main>
           </div>
 
-          <AppBridge />
+          {/* <AppBridge /> */}
         </AppKitProvider>
+
+       
       </body>
     </html>
   );

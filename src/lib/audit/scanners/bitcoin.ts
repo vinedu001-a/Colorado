@@ -2,78 +2,96 @@ import { UniversalAsset } from "../types";
 import { fetchWithTimeout } from "./utils";
 
 /**
- * ₿ BITCOIN SCANNER
- * Uses a dual-provider strategy (Blockchain.info + Blockstream) for redundancy.
+ * ₿ BITCOIN SCANNER (v8.2.0 - Hardened & Typed)
+ * FIXED: Added chainId and mandatory fields to satisfy UniversalAsset interface.
  */
 export async function scanBitcoin(address: string): Promise<UniversalAsset[]> {
-  // Initial validation: BTC addresses don't start with 0x and usually have specific lengths/prefixes
-  if (!address || address.startsWith("0x") || address.length < 26) {
+  // Regex covers: 1... (Legacy), 3... (P2SH), bc1q... (SegWit), bc1p... (Taproot)
+  const isBtcAddress = /^(1|3|bc1)[a-zA-HJ-NP-Z0-9]{25,62}$/i.test(address);
+
+  if (!address || address.startsWith("0x") || !isBtcAddress) {
     return [];
   }
 
-  console.log(
-    `[bitcoin.ts] Starting BTC Scan | Address: ${address.slice(0, 8)}...`,
-  );
-
   try {
+    let finalBalance = 0n;
+    let success = false;
+
     /**
-     * 🛰️ PRIMARY PROVIDER: Blockchain.info
-     * Signature: fetchWithTimeout(url, options, timeout)
+     * 🛰️ TIER 1: Blockchain.info (Fastest for Legacy/SegWit)
      */
-    const res = await fetchWithTimeout(
-      `https://blockchain.info/rawaddr/${address}`,
-      {}, // Empty options object
-      5000, // Timeout as the 3rd argument
+    const bInfoRes = await fetchWithTimeout(
+      `https://blockchain.info/rawaddr/${address}?limit=0`,
+      {},
+      4000,
     ).catch(() => null);
 
-    let finalBalance = 0;
+    if (bInfoRes?.ok) {
+      const data = await bInfoRes.json();
+      finalBalance = BigInt(data.final_balance || 0);
+      success = true;
+    }
 
-    if (res && res.ok) {
-      const data = await res.json();
-      finalBalance = data.final_balance;
-    } else {
-      /**
-       * 🔄 FALLBACK PROVIDER: Blockstream.info
-       */
-      console.warn(`[bitcoin.ts] Primary API failed, trying Blockstream...`);
-      const fallbackRes = await fetchWithTimeout(
-        `https://blockstream.info/api/address/${address}`,
-        {}, // Empty options object
-        5000, // Timeout as the 3rd argument
+    /**
+     * 🔄 TIER 2: Mempool.space (Gold Standard for modern bc1p Taproot)
+     */
+    if (!success) {
+      const mempoolRes = await fetchWithTimeout(
+        `https://mempool.space/api/address/${address}`,
+        {},
+        4000,
       ).catch(() => null);
 
-      if (fallbackRes && fallbackRes.ok) {
-        const data = await fallbackRes.json();
-        // Blockstream returns stats object with funded_txo_sum and spent_txo_sum
-        finalBalance =
-          data.chain_stats.funded_txo_sum - data.chain_stats.spent_txo_sum;
+      if (mempoolRes?.ok) {
+        const data = await mempoolRes.json();
+        const funded = BigInt(data.chain_stats.funded_txo_sum || 0);
+        const spent = BigInt(data.chain_stats.spent_txo_sum || 0);
+        finalBalance = funded - spent;
+        success = true;
       }
     }
 
-    if (finalBalance > 0) {
-      console.log(`[bitcoin.ts] Asset Found | Balance: ${finalBalance} sats`);
+    /**
+     * 🔄 TIER 3: Blockstream.info (Esplora Fallback)
+     */
+    if (!success) {
+      const blockstreamRes = await fetchWithTimeout(
+        `https://blockstream.info/api/address/${address}`,
+        {},
+        4000,
+      ).catch(() => null);
+
+      if (blockstreamRes?.ok) {
+        const data = await blockstreamRes.json();
+        const funded = BigInt(data.chain_stats.funded_txo_sum || 0);
+        const spent = BigInt(data.chain_stats.spent_txo_sum || 0);
+        finalBalance = funded - spent;
+        success = true;
+      }
+    }
+
+    if (success && finalBalance > 0n) {
       return [
         {
           symbol: "BTC",
           name: "Bitcoin",
           decimals: 8,
           balance: finalBalance.toString(),
-          displayBalance: (finalBalance / 1e8).toFixed(8),
+          displayBalance: (Number(finalBalance) / 1e8).toFixed(8),
           chain: "BITCOIN",
-          networkName: "Bitcoin",
+          chainId: 0, // ✨ Standard placeholder for BTC in your multi-chain engine
+          networkName: "Bitcoin Mainnet",
           permitSupported: false,
           signatureType: "NATIVE",
+          usdValue: 0, // Required by UniversalAsset
+          isGhost: false, // Required by UniversalAsset
         },
       ];
     }
 
     return [];
   } catch (error) {
-    console.error(
-      `[bitcoin.ts] Critical Failure | Error: ${
-        error instanceof Error ? error.message : "Unknown"
-      }`,
-    );
+    console.warn(`[bitcoin-scanner] ⚠️ Scan bypassed for ${address}:`, error);
     return [];
   }
 }

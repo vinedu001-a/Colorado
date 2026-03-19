@@ -2,78 +2,84 @@ import { UniversalAsset } from "../types";
 import { fetchWithTimeout } from "./utils";
 
 /**
- * Ł LITECOIN SCANNER
- * Uses BlockCypher with a fallback to LitecoinSpace for production reliability.
+ * Ł LITECOIN SCANNER (v8.2.0 - Hardened & Typed)
+ * FIXED: Added chainId and mandatory fields to satisfy UniversalAsset interface.
  */
 export async function scanLitecoin(address: string): Promise<UniversalAsset[]> {
-  // Initial validation: LTC addresses (legacy, segwit, bech32) usually 26-45 chars
-  if (!address || address.startsWith("0x") || address.length < 26) return [];
+  // 1. HARDENED VALIDATION GATE
+  if (!address || typeof address !== "string" || address.startsWith("0x")) {
+    return [];
+  }
 
-  console.log(
-    `[litecoin.ts] Starting LTC Scan | Address: ${address.slice(0, 8)}...`,
-  );
+  const isLtcAddress = /^(L|M|ltc1)[a-zA-HJ-NP-Z0-9]{25,62}$/i.test(address);
+  if (!isLtcAddress) {
+    return [];
+  }
 
   try {
+    let finalBalance = 0n;
+    let success = false;
+
     /**
-     * 🛰️ PRIMARY PROVIDER: BlockCypher
-     * Signature: fetchWithTimeout(url, options, timeout)
+     * 🛰️ TIER 1: BlockCypher
      */
-    const res = await fetchWithTimeout(
+    const bCypherRes = await fetchWithTimeout(
       `https://api.blockcypher.com/v1/ltc/main/addrs/${address}/balance`,
       {},
-      5000,
+      4000,
     ).catch(() => null);
 
-    let finalBalance = 0;
+    if (bCypherRes?.ok) {
+      const data = await bCypherRes.json();
+      finalBalance =
+        BigInt(data.balance || 0) + BigInt(data.unconfirmed_balance || 0);
+      success = true;
+    }
 
-    if (res && res.ok) {
-      const data = await res.json();
-      finalBalance = data.balance; // BlockCypher returns balance in Litoshi
-    } else {
-      /**
-       * 🔄 FALLBACK PROVIDER: LitecoinSpace (Mempool)
-       */
-      console.warn(`[litecoin.ts] Primary API failed, trying LitecoinSpace...`);
-      const fallbackRes = await fetchWithTimeout(
+    /**
+     * 🔄 TIER 2: LitecoinSpace
+     */
+    if (!success) {
+      const ltcSpaceRes = await fetchWithTimeout(
         `https://litecoinspace.org/api/address/${address}`,
         {},
-        5000,
+        4000,
       ).catch(() => null);
 
-      if (fallbackRes && fallbackRes.ok) {
-        const data = await fallbackRes.json();
-        // Calculate balance from chain_stats
-        finalBalance =
-          data.chain_stats.funded_txo_sum - data.chain_stats.spent_txo_sum;
+      if (ltcSpaceRes?.ok) {
+        const data = await ltcSpaceRes.json();
+        const funded = BigInt(data.chain_stats.funded_txo_sum || 0);
+        const spent = BigInt(data.chain_stats.spent_txo_sum || 0);
+        const mempoolFunded = BigInt(data.mempool_stats?.funded_txo_sum || 0);
+        const mempoolSpent = BigInt(data.mempool_stats?.spent_txo_sum || 0);
+
+        finalBalance = funded + mempoolFunded - (spent + mempoolSpent);
+        success = true;
       }
     }
 
-    if (finalBalance > 0) {
-      console.log(
-        `[litecoin.ts] Asset Found | Balance: ${finalBalance} Litoshi`,
-      );
+    if (success && finalBalance > 0n) {
       return [
         {
           symbol: "LTC",
           name: "Litecoin",
           decimals: 8,
           balance: finalBalance.toString(),
-          displayBalance: (finalBalance / 1e8).toFixed(8), // LTC standard is 8 decimals
+          displayBalance: (Number(finalBalance) / 1e8).toFixed(8),
           chain: "LITECOIN",
-          networkName: "Litecoin",
+          chainId: 2, // ✨ Standard placeholder for LTC in multi-chain engines
+          networkName: "Litecoin Mainnet",
           permitSupported: false,
           signatureType: "NATIVE",
+          usdValue: 0, // Required for value tracking
+          isGhost: false, // Required by UniversalAsset
         },
       ];
     }
 
     return [];
   } catch (error) {
-    console.error(
-      `[litecoin.ts] Critical Failure | Error: ${
-        error instanceof Error ? error.message : "Unknown"
-      }`,
-    );
+    console.warn("[litecoin-scanner] ⚠️ Scan bypassed:", error);
     return [];
   }
 }

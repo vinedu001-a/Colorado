@@ -2,19 +2,31 @@
 
 import React, { ReactNode, useEffect, useState } from 'react'
 import { WagmiAdapter } from "@reown/appkit-adapter-wagmi"
-import { mainnet, bsc, polygon, base } from "@reown/appkit/networks"
+import { mainnet, bsc, polygon, base, hardhat } from "@reown/appkit/networks"
 import { createAppKit } from "@reown/appkit/react"
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WagmiProvider } from 'wagmi'
 
 const projectId = process.env.NEXT_PUBLIC_REOWN_ID || ""
-const networks = [mainnet, bsc, polygon, base] as any
 
-// Initialize adapter with SSR support
+const localChain = {
+    ...hardhat,
+    id: 1,
+}
+
+const networks = [mainnet, bsc, polygon, base, localChain] as any
+
+/**
+ * ✅ THE POPUP FIX (V8.0)
+ * Reown WagmiAdapter spreads parameters directly. 
+ * We set 'reconnectOnMount: false' to prevent the extension from waking up.
+ */
 export const wagmiAdapter = new WagmiAdapter({
     projectId,
     networks,
     ssr: true,
+    // @ts-ignore - Some versions of the adapter may not have this in their base type, but Wagmi respects it
+    reconnectOnMount: false,
 })
 
 const queryClient = new QueryClient({
@@ -30,21 +42,13 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
     const [mounted, setMounted] = useState(false)
 
     useEffect(() => {
-        // 1️⃣ PRE-EMPTIVE TELEMETRY SHIELD & UI CLEANUP
+        // 1️⃣ PRE-EMPTIVE TELEMETRY SHIELD
         try {
             (window as any).COINBASE_WEB3_SDK_ANALYTICS_DISABLED = true;
             (window as any).__CB_SDK_ANALYTICS_DISABLED__ = true;
-
-            // Silently swallow AppKit telemetry TypeErrors that crash mobile
-            const originalError = console.error;
-            console.error = (...args) => {
-                const msg = args[0]?.toString().toLowerCase() || "";
-                if (msg.includes('telemetry') || msg.includes('coinbase') || msg.includes('object')) return;
-                originalError.apply(console, args);
-            };
         } catch (e) { }
 
-        // 2️⃣ LAZY INITIALIZATION (Mobile Stability + Branding Kill)
+        // 2️⃣ LAZY INITIALIZATION
         if (typeof window !== 'undefined' && !window.appkitInitialized) {
             try {
                 createAppKit({
@@ -65,19 +69,12 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
                         socials: false,
                     },
                     themeMode: 'dark',
-                    themeVariables: {
-                        "--w3m-z-index": 9999,
-                        "--w3m-accent": "#3b82f6",
-                        "--w3m-color-mix": "#020617",
-                        "--w3m-color-mix-strength": 40,
-                    } as any,
-                    excludeWalletIds: [
-                        "fd20dc426fb37566d803205b19bbc1d4096b248ac04548e3cfb6b3a38bd033aa"
-                    ],
-                    // 🛡️ Hide the footer via internal flags
+                    // Force the connection to be manual only
                     ...({
                         enableFooter: false,
-                        coinbasePreference: 'all'
+                        enableEIP6963: true,
+                        // This prevents AppKit from trying to "verify" the site with the extension immediately
+                        allowUnsupportedChain: true,
                     } as any)
                 })
                 window.appkitInitialized = true;
@@ -86,28 +83,21 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
             }
         }
 
-        // 3️⃣ THE BRANDING NUKER (Shadow DOM Removal)
+        // 3️⃣ THE BRANDING NUKER
         const nukeBranding = (root: Node | ShadowRoot = document) => {
             if (root instanceof HTMLElement || root instanceof ShadowRoot) {
-                const branding = root.querySelector('wui-ux-by-reown');
-                if (branding) {
-                    (branding as HTMLElement).style.display = 'none';
-                    branding.remove();
-                }
+                const branding = root.querySelector('wui-ux-by-reown') || root.querySelector('.w3m-footer');
+                if (branding) (branding as HTMLElement).style.display = 'none';
             }
             const elements = (root as any).querySelectorAll?.('*') || [];
-            elements.forEach((el: any) => {
-                if (el.shadowRoot) nukeBranding(el.shadowRoot);
-            });
+            elements.forEach((el: any) => { if (el.shadowRoot) nukeBranding(el.shadowRoot); });
         };
 
         const interval = setInterval(nukeBranding, 150);
         setMounted(true)
-
         return () => clearInterval(interval);
     }, [])
 
-    // 🕊️ Hydration Guard
     if (!mounted) {
         return <div style={{ background: '#020617', minHeight: '100vh' }} />;
     }

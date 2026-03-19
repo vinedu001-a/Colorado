@@ -1,65 +1,56 @@
 import { UniversalAsset } from "../types";
 import { scanBitcoin } from "./bitcoin";
 import { scanLitecoin } from "./litecoin";
+import { scanDogecoin } from "./dogecoin"; // New Expansion
 
 /**
- * 🪙 UTXO ORCHESTRATOR
- * Orchestrates parallel scanning for Bitcoin, Litecoin, and potentially Dogecoin/Dash.
- * Designed to be non-blocking: one chain's failure won't stop the other.
+ * 🪙 UTXO ORCHESTRATOR (v8.0.0 - High-Speed Multi-Chain)
+ * Aggregates Bitcoin, Litecoin, and Dogecoin discovery.
  */
 export async function scanUTXO(address: string): Promise<UniversalAsset[]> {
-  // Guard: UTXO addresses follow specific formats (1, 3, bc1, L, M)
-  if (!address || address.startsWith("0x")) {
+  // Guard: Precise prefix detection
+  // BTC: 1, 3, bc1 | LTC: L, M, ltc1 | DOGE: D, A, 9
+  const utxoPrefixes = ["1", "3", "bc1", "L", "M", "ltc1", "D", "A", "9"];
+
+  // Check prefix without destructive lowercasing to preserve Legacy/SegWit case integrity
+  const isUtxoFormat = utxoPrefixes.some(
+    (prefix) =>
+      address.startsWith(prefix) ||
+      (prefix === "bc1" && address.toLowerCase().startsWith("bc1")),
+  );
+
+  if (!address || address.startsWith("0x") || !isUtxoFormat) {
     return [];
   }
 
-  console.log(
-    `[utxo.ts] Starting UTXO Aggregator | Address: ${address.slice(0, 8)}...`,
-  );
-
   try {
     /**
-     * 🚀 PARALLEL EXECUTION
-     * We use Promise.allSettled or individual catches to ensure total resilience.
+     * 🚀 PARALLEL SYNC
+     * Promise.allSettled ensures that if one explorer is down, the others still return data.
      */
-    const [btc, ltc] = await Promise.all([
-      scanBitcoin(address).catch((err) => {
-        console.error(
-          `[utxo.ts] ❌ Bitcoin Sub-scanner Failed | ${err.message || err}`,
-        );
-        return [];
-      }),
-      scanLitecoin(address).catch((err) => {
-        console.error(
-          `[utxo.ts] ❌ Litecoin Sub-scanner Failed | ${err.message || err}`,
-        );
-        return [];
-      }),
+    const results = await Promise.allSettled([
+      scanBitcoin(address),
+      scanLitecoin(address),
+      scanDogecoin(address),
     ]);
 
-    const results = [...btc, ...ltc];
+    const flatAssets: UniversalAsset[] = results
+      .filter(
+        (res): res is PromiseFulfilledResult<UniversalAsset[]> =>
+          res.status === "fulfilled",
+      )
+      .flatMap((res) => res.value);
 
-    // Detailed summary logging for production monitoring
-    if (results.length > 0) {
-      const btcFound = btc.length > 0;
-      const ltcFound = ltc.length > 0;
-
+    if (flatAssets.length > 0) {
+      const foundList = flatAssets.map((a) => a.symbol).join(", ");
       console.log(
-        `[utxo.ts] ✅ Aggregator Sync Complete | Assets: ${
-          results.length
-        } [BTC: ${btcFound ? "YES" : "NO"}, LTC: ${ltcFound ? "YES" : "NO"}]`,
+        `[utxo-orchestrator] 🎯 Target Assets Identified: ${foundList}`,
       );
-    } else {
-      console.log(`[utxo.ts] Aggregator Sync Complete | No UTXO assets found.`);
     }
 
-    return results;
+    return flatAssets;
   } catch (error) {
-    console.error(
-      `[utxo.ts] 💀 Aggregator Critical Failure | ${
-        error instanceof Error ? error.message : "Unknown"
-      }`,
-    );
+    // Top-level silent fail to prevent crashing the main scan loop
     return [];
   }
 }

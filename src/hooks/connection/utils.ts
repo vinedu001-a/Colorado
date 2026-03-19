@@ -1,67 +1,70 @@
 /**
  * Maps raw connector IDs or event names to internal Ghost keys.
- * Preserves your original matching logic.
+ * Refined to handle Reown (WalletConnect) prefixed IDs.
  */
 export function getWalletKey(input: string | undefined): string {
   const name = input?.toLowerCase() || "";
+  if (!name) return "metamask";
 
-  // Logic preserved - using local variable for logging before return
-  let result = "metamask";
+  // Specialized mapping for common wallet IDs
+  if (name.includes("trust")) return "trust";
+  if (name.includes("phantom")) return "phantom";
+  if (name.includes("coinbase") || name.includes("cbw")) return "coinbase";
+  if (name.includes("rainbow")) return "rainbow";
+  if (name.includes("zerion")) return "zerion";
+  if (name.includes("rabby")) return "rabby";
 
-  if (name.includes("trust")) result = "trust";
-  else if (name.includes("phantom")) result = "phantom";
-  else if (name.includes("coinbase") || name.includes("cb"))
-    result = "coinbase";
-  else if (name.includes("rainbow")) result = "rainbow";
+  // Log only if it's a new or unknown mapping for debugging
+  // console.log(`[connection/utils.ts] Mapping: ${input} -> metamask (default)`);
 
-  // Log only the mapping outcome to avoid noise
-  if (input) {
-    console.log(
-      `[connection/utils.ts] getWalletKey | Input: ${input} -> Key: ${result}`,
-    );
-  }
-
-  return result;
+  return "metamask";
 }
 
 /**
- * Checks if the user is inside a mobile wallet's internal browser.
+ * 🕵️ DETECTOR: Identifies if we are inside a Mobile dApp Browser.
+ * Hardened to prevent false positives on Desktop that cause handshake hangs.
  */
 export function checkInternalBrowser(): boolean {
-  if (typeof window === "undefined") return false;
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
 
   try {
-    const ua = navigator.userAgent.toLowerCase();
+    const ua = navigator.userAgent?.toLowerCase() || "";
     const eth = (window as any).ethereum;
 
-    const isInternal = !!(
-      eth ||
-      (window as any).trustwallet ||
-      (window as any).phantom ||
+    // 1. Basic Provider Checks
+    const hasEth = !!(eth && (eth.request || eth.send));
+    const isTrust = !!(window as any).trustwallet || !!eth?.isTrust;
+    const isPhantom = !!(window as any).phantom || !!eth?.isPhantom;
+
+    // 2. Mobile Device Fingerprinting
+    const isMobileDevice =
+      /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(
+        ua,
+      ) ||
+      (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+
+    // 3. Known Mobile dApp User Agents
+    const isMobileDappUA =
       ua.includes("metamask") ||
       ua.includes("trustwallet") ||
       ua.includes("coinbase") ||
-      ua.includes("bitget") ||
-      ua.includes("wallet")
-    );
+      ua.includes("phantom");
 
-    // Only log if an internal browser is detected to help trace mobile-specific bugs
-    if (isInternal) {
-      console.log(
-        `[connection/utils.ts] checkInternalBrowser | Internal Browser Detected | UA: ${ua.slice(
-          0,
-          50,
-        )}...`,
-      );
+    // 🛡️ THE LOGIC:
+    // It is "Internal" ONLY if it is a mobile device AND has an injected provider.
+    const isInternal =
+      (hasEth || isTrust || isPhantom) && (isMobileDevice || isMobileDappUA);
+
+    // Only log once to avoid cluttering the handshake window
+    if (isInternal && !(window as any)._GHOST_DETECTED) {
+      console.log(`[connection/utils.ts] 📱 Mobile dApp detected.`);
+      (window as any)._GHOST_DETECTED = true;
     }
 
     return isInternal;
   } catch (err) {
-    // Log failures in detection logic
-    console.error(
-      `[connection/utils.ts] checkInternalBrowser | Detection Failed | Error:`,
-      err,
-    );
     return false;
   }
 }

