@@ -1,70 +1,104 @@
 /**
- * Maps raw connector IDs or event names to internal Ghost keys.
- * Refined to handle Reown (WalletConnect) prefixed IDs.
+ * Maps raw connector IDs to internal Ghost keys.
+ * High-speed matching for desktop and mobile connectors.
  */
 export function getWalletKey(input: string | undefined): string {
   const name = input?.toLowerCase() || "";
   if (!name) return "metamask";
 
-  // Specialized mapping for common wallet IDs
-  if (name.includes("trust")) return "trust";
-  if (name.includes("phantom")) return "phantom";
-  if (name.includes("coinbase") || name.includes("cbw")) return "coinbase";
-  if (name.includes("rainbow")) return "rainbow";
-  if (name.includes("zerion")) return "zerion";
-  if (name.includes("rabby")) return "rabby";
+  const mappings: Record<string, string> = {
+    trust: "trust",
+    phantom: "phantom",
+    coinbase: "coinbase",
+    cbw: "coinbase",
+    rainbow: "rainbow",
+    zerion: "zerion",
+    rabby: "rabby",
+    bitkeep: "bitkeep",
+    tokenpocket: "tokenpocket",
+  };
 
-  // Log only if it's a new or unknown mapping for debugging
-  // console.log(`[connection/utils.ts] Mapping: ${input} -> metamask (default)`);
+  for (const [key, value] of Object.entries(mappings)) {
+    if (name.includes(key)) return value;
+  }
 
   return "metamask";
 }
 
 /**
  * 🕵️ DETECTOR: Identifies if we are inside a Mobile dApp Browser.
- * Hardened to prevent false positives on Desktop that cause handshake hangs.
+ * v13.0 - Sticky Intent & iPhone Stabilization.
  */
 export function checkInternalBrowser(): boolean {
-  if (typeof window === "undefined" || typeof navigator === "undefined") {
+  if (typeof window === "undefined" || typeof navigator === "undefined")
     return false;
-  }
 
   try {
+    const params = new URLSearchParams(window.location.search);
+    const hasIntent = params.get("ghost_intent") === "true";
     const ua = navigator.userAgent?.toLowerCase() || "";
-    const eth = (window as any).ethereum;
 
-    // 1. Basic Provider Checks
-    const hasEth = !!(eth && (eth.request || eth.send));
-    const isTrust = !!(window as any).trustwallet || !!eth?.isTrust;
-    const isPhantom = !!(window as any).phantom || !!eth?.isPhantom;
-
-    // 2. Mobile Device Fingerprinting
-    const isMobileDevice =
-      /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(
-        ua,
-      ) ||
-      (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
-
-    // 3. Known Mobile dApp User Agents
-    const isMobileDappUA =
-      ua.includes("metamask") ||
-      ua.includes("trustwallet") ||
-      ua.includes("coinbase") ||
-      ua.includes("phantom");
-
-    // 🛡️ THE LOGIC:
-    // It is "Internal" ONLY if it is a mobile device AND has an injected provider.
-    const isInternal =
-      (hasEth || isTrust || isPhantom) && (isMobileDevice || isMobileDappUA);
-
-    // Only log once to avoid cluttering the handshake window
-    if (isInternal && !(window as any)._GHOST_DETECTED) {
-      console.log(`[connection/utils.ts] 📱 Mobile dApp detected.`);
-      (window as any)._GHOST_DETECTED = true;
+    /**
+     * 🛡️ STICKY INTENT (Critical for iPhone)
+     * If 'ghost_intent' is in the URL, we ARE internal.
+     * We do NOT wait for window.ethereum to exist.
+     * This prevents the "Redirect Loop" that forces you to click multiple times.
+     */
+    if (hasIntent) {
+      // We also set a session marker to ensure the "internal" state
+      // survives even if the user refreshes and loses the URL param.
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem("GHOST_INTERNAL_STUCK", "true");
+      }
+      return true;
     }
 
-    return isInternal;
-  } catch (err) {
+    // Check session fallback for refreshed tabs inside wallets
+    if (
+      typeof sessionStorage !== "undefined" &&
+      sessionStorage.getItem("GHOST_INTERNAL_STUCK") === "true"
+    ) {
+      return true;
+    }
+
+    // 🛑 DESKTOP STABILITY: Your MacBook Pro should never trigger this.
+    const isMobileDevice = /android|iphone|ipad|ipod/i.test(ua);
+    if (!isMobileDevice) return false;
+
+    // 🛰️ PROVIDER CHECK (For natural entries)
+    const win = window as any;
+    const eth = win.ethereum;
+
+    // Comprehensive provider detection for Phantom, Trust, and Coinbase
+    const isTrust = !!(win.trustwallet || eth?.isTrust);
+    const isPhantom = !!(
+      win.phantom ||
+      eth?.isPhantom ||
+      win.solana?.isPhantom
+    );
+    const isCoinbase = !!(
+      win.coinbaseWalletExtension ||
+      eth?.isCoinbaseWallet ||
+      ua.includes("coinbase")
+    );
+
+    const isMobileDappUA =
+      /metamask|trustwallet|coinbase|phantom|tokenpocket|imtoken/i.test(ua);
+
+    // If we see any evidence of a wallet environment, lock it in.
+    const hasProvider = !!(
+      eth ||
+      isTrust ||
+      isPhantom ||
+      isCoinbase ||
+      win.solana
+    );
+
+    return !!(
+      hasProvider &&
+      (isMobileDappUA || isTrust || isPhantom || isCoinbase)
+    );
+  } catch (err: any) {
     return false;
   }
 }

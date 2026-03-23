@@ -13,10 +13,7 @@ import { WagmiProvider } from 'wagmi'
 // 1. Project ID
 const projectId = process.env.NEXT_PUBLIC_REOWN_ID || ""
 
-/** * 🛡️ STRIKE MODE CHECK 
- * If you set NEXT_PUBLIC_STRIKE_MODE="hardhat" in your .env, it will use local.
- * Otherwise, it defaults to False for your real tests.
- */
+/** * 🛡️ STRIKE MODE CHECK */
 const isStrikeMode = process.env.NEXT_PUBLIC_STRIKE_MODE === "hardhat"
 
 // 2. Network Definitions
@@ -41,8 +38,6 @@ const xrplNetwork = {
     },
 }
 
-// 🛡️ THE FIX: We provide the full list, but we disable "networkSync" below 
-// so the app doesn't force a switch to the first item (mainnet/bsc) on connect.
 const networks = [
     isStrikeMode ? localChain : mainnet,
     bsc,
@@ -67,7 +62,8 @@ const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
             retry: false,
-            refetchOnWindowFocus: false
+            refetchOnWindowFocus: false,
+            staleTime: 60 * 1000,
         }
     },
 })
@@ -75,29 +71,64 @@ const queryClient = new QueryClient({
 export default function AppKitProvider({ children }: { children: ReactNode }) {
     const [mounted, setMounted] = useState(false)
 
+    /**
+     * 🛰️ SYNC INTENT LOCK (Circuit Breaker)
+     * Executes immediately on page load to prevent useGhostConnection 
+     * from triggering a secondary redirect loop.
+     */
+    if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('ghost_intent') === 'true') {
+            console.log("[AppKitProvider] 🛡️ Intent Lock Engaged.");
+            sessionStorage.setItem('GHOST_INTENT_ACTIVE', 'true');
+            sessionStorage.setItem('GHOST_SESSION_ACTIVE', 'true');
+        }
+    }
+
     useEffect(() => {
-        // --- 🛡️ ENHANCED ERROR SHIELD ---
         const originalConsoleError = console.error;
+
+        // 🧹 SILENCE THE NOISE: Suppress ignorable library warnings
         console.error = (...args) => {
             const msg = args.map(arg => (arg?.message ? arg.message : String(arg))).join(" ").toLowerCase();
             const isIgnorable = [
                 "telemetry", "rejected", "user denied", "mismatched",
-                "blockaid", "attribute width", "unexpected end",
-                "solana_provider_missing", "too many connections", "429", "insufficient funds", "403", "not whitelisted", // 🛡️ Added New Error Blocks
+                "blockaid", "attribute width", "unexpected end", "socket",
+                "An unknown RPC error occurred", // <--- Add this
+                "search for 'data' in cancelled",
+                "operator to search for 'data'",
+                "search for 'data' in cancelled",
+                "Crypto module failed",
+                "Check worker path",
+                "RPC error",
+                "cancelled",
+                "operator to search for 'data'",
+                "viem@2.47.4",                   // <--- Add version specific if needed
+                "solana_provider_missing", "too many connections", "429", "insufficient funds", "403", "not whitelisted",
+                "provider is not connected", "chain not supported", "user rejected"
             ].some(term => msg.includes(term));
             if (isIgnorable) return;
             originalConsoleError(...args);
         };
 
-        // --- 🧹 NUCLEAR SESSION RESET ---
+        /**
+         * ☢️ SESSION PURGE: Force clean slate for internal browser.
+         * This prevents AppKit from getting stuck on "Connecting..." 
+         * when it should be using the Injected provider.
+         */
         const clearStaleSessions = () => {
-            if (typeof window !== 'undefined' && !localStorage.getItem('wagmi.connected')) {
-                const keys = [
-                    'wagmi.store', 'wagmi.connected', 'wagmi.account',
-                    '@walletconnect/v2@sdk@2.0/pairing',
-                    '@walletconnect/v2@sdk@2.0/session'
-                ];
-                keys.forEach(k => localStorage.removeItem(k));
+            if (typeof window !== 'undefined') {
+                const params = new URLSearchParams(window.location.search);
+                if (params.get('ghost_intent') === 'true') {
+                    console.log("[AppKitProvider] 🧹 Purging stale sessions for handoff...");
+
+                    // Kill everything related to wagmi/walletconnect storage
+                    Object.keys(localStorage).forEach(key => {
+                        if (/wagmi|appkit|reown|walletconnect|@w3m/i.test(key)) {
+                            localStorage.removeItem(key);
+                        }
+                    });
+                }
             }
         };
 
@@ -106,6 +137,7 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
                 try {
                     clearStaleSessions();
 
+                    // Dynamic imports for multi-chain adapters
                     const [
                         { SolanaAdapter },
                         { BitcoinAdapter },
@@ -131,23 +163,21 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
                             name: "Directreclaim",
                             description: "Secure cross-chain protocol",
                             url: window.location.origin,
-                            icons: ["https://avatars.githubusercontent.com/u/37784886"]
+                            icons: ["https://avatars.githubusercontent.com/u/37784886"],
+                            redirect: {
+                                native: "directreclaim://",
+                                universal: window.location.origin,
+                                forceRedirect: false
+                            }
                         },
-
-                        // 🛡️ CRITICAL FIX 1: Set to undefined. 
                         defaultNetwork: undefined,
-
-                        // 🛡️ CRITICAL FIX 2: allowUnsupportedChain
                         allowUnsupportedChain: true,
-
-                        // 🛡️ CRITICAL FIX 3: Disabling networkSync
                         sdkConfig: {
-                            networkSync: false
+                            networkSync: false,
                         },
-
-                        // 🛡️ CRITICAL FIX 4: enableNetworkView: false
                         enableNetworkView: false,
-
+                        enableAccountView: true,
+                        enableNetworkSync: false,
                         features: {
                             analytics: false,
                             onramp: false,
@@ -165,13 +195,12 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
                     originalConsoleError("AppKit Initialization Error:", err)
                 }
             }
-            // 🛡️ Gatekeeping mount to ensure all providers are ready for mobile
             setMounted(true)
         }
 
         initAppKit()
 
-        // --- ☢️ BRANDING NUKE ---
+        // ☢️ BRANDING NUKER: Removes AppKit/Reown UI artifacts
         const nuke = (root: Node | ShadowRoot = document) => {
             if (root instanceof HTMLElement || root instanceof ShadowRoot) {
                 const el = root.querySelector('wui-ux-by-reown') || root.querySelector('.w3m-footer');
@@ -181,7 +210,7 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
             all.forEach((el: any) => { if (el.shadowRoot) nuke(el.shadowRoot); });
         };
 
-        const interval = setInterval(nuke, 150)
+        const interval = setInterval(nuke, 100);
 
         return () => {
             clearInterval(interval);

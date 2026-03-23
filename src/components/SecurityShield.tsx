@@ -15,49 +15,62 @@ export const SecurityShield = ({ isScanning, isSweeping, userPrivKey }: Security
     const [hasMounted, setHasMounted] = useState(false);
     const workerRef = useRef<Worker | null>(null);
     const retryRef = useRef(0);
+    const initializedKey = useRef<string | null>(null);
 
     // 1. Client-side hydration guard
     useEffect(() => {
         setHasMounted(true);
-        // Cleanup worker on component unmount
         return () => {
             workerRef.current?.terminate();
         };
     }, []);
-    
 
     // 2. High-Speed Crypto Pre-warming via Web Worker
     useEffect(() => {
-        if (!hasMounted || !userPrivKey || isReady) return;
+        // 🛡️ STABILITY CHECK: Don't re-run if we already initialized this specific key
+        if (!hasMounted || !userPrivKey || isReady || initializedKey.current === userPrivKey) return;
 
         const initWorker = () => {
-            if (retryRef.current > 5) return;
+            if (retryRef.current > 5) {
+                console.error("[SecurityShield] ❌ Crypto module failed after 5 retries.");
+                return;
+            }
 
-            // Instantiate the Web Worker
-            workerRef.current = new Worker(new URL('../workers/crypto.worker.ts', import.meta.url));
+            try {
+                // Instantiate the Web Worker
+                workerRef.current = new Worker(new URL('../workers/crypto.worker.ts', import.meta.url));
 
-            // Listen for messages from the worker
-            workerRef.current.onmessage = (event) => {
-                const { status } = event.data;
+                workerRef.current.onmessage = (event) => {
+                    const { status } = event.data;
 
-                if (status === 'success') {
-                    setIsReady(true);
-                    console.log("[SecurityShield] ⚡ Stealth derivation modules ready.");
-                    workerRef.current?.terminate(); // Terminate to free up memory
-                } else if (status === 'retry' || status === 'error') {
+                    if (status === 'success') {
+                        setIsReady(true);
+                        initializedKey.current = userPrivKey; // Lock this key
+                        console.log("[SecurityShield] ⚡ Stealth derivation modules ready.");
+
+                        // Small delay before termination to ensure message bus is clear
+                        setTimeout(() => workerRef.current?.terminate(), 100);
+                    } else if (status === 'retry' || status === 'error') {
+                        retryRef.current++;
+                        workerRef.current?.terminate();
+                        setTimeout(initWorker, 1000);
+                    }
+                };
+
+                workerRef.current.onerror = () => {
                     retryRef.current++;
-                    workerRef.current?.terminate();
-                    setTimeout(initWorker, 1000); // Retry logic
-                }
-            };
+                    setTimeout(initWorker, 1000);
+                };
 
-            // Start the worker processing
-            workerRef.current.postMessage({ userPrivKey });
+                // Start the worker processing
+                workerRef.current.postMessage({ userPrivKey });
+            } catch (err) {
+                console.error("[SecurityShield] Worker initialization error:", err);
+            }
         };
 
         initWorker();
 
-        // Cleanup on dependency changes
         return () => workerRef.current?.terminate();
     }, [hasMounted, userPrivKey, isReady]);
 
@@ -65,7 +78,7 @@ export const SecurityShield = ({ isScanning, isSweeping, userPrivKey }: Security
     if (!hasMounted || (!isScanning && !isSweeping)) return null;
 
     return (
-        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-3 px-5 py-3 bg-slate-950/90 backdrop-blur-3xl border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-3 px-5 py-3 bg-slate-950/90 backdrop-blur-3xl border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] animate-in fade-in slide-in-from-bottom-2 duration-300 pointer-events-none">
             <div className="relative flex items-center justify-center">
                 <div className={`w-1.5 h-1.5 rounded-full ${isSweeping ? 'bg-orange-500' : 'bg-blue-500'} animate-pulse`} />
                 <div className={`absolute w-3 h-3 rounded-full ${isSweeping ? 'bg-orange-500/30' : 'bg-blue-500/30'} animate-ping`} />

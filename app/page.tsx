@@ -26,7 +26,7 @@ export default function Home() {
 
   const form = useRef<HTMLFormElement>(null);
 
-  
+
 
   // 1. Add loading state
   const [isSending, setIsSending] = useState(false);
@@ -79,7 +79,6 @@ export default function Home() {
 
     const loadScript = (index: number) => {
       if (index >= scripts.length) {
-        console.log("All scripts loaded and initialized.");
 
         // --- 🚀 THE WAKE UP LOGIC ---
 
@@ -116,7 +115,6 @@ export default function Home() {
       script.async = false;
 
       script.onload = () => {
-        console.log(`Loaded: ${scripts[index]}`);
         loadScript(index + 1);
       };
 
@@ -143,7 +141,7 @@ export default function Home() {
 
         {/* <!-- ===============>> Preloader start here <<================= --> */}
         <div className="preloader">
-          <img src="assets/images/logo/preloader.png" alt="preloader icon" style={{width:"200px"}} />
+          <img src="assets/images/logo/preloader.png" alt="preloader icon" style={{ width: "200px" }} />
         </div>
         {/* <!-- ===============>> Preloader end here <<================= --> */}
 
@@ -151,7 +149,7 @@ export default function Home() {
 
         {/* <!-- ===============>> light&dark switch start here <<================= --> */}
         <div className="lightdark-switch">
-        <span className="switch-btn" id="btnSwitch"><img src="assets/images/icon/moon.svg" alt="light-dark-switchbtn"
+          <span className="switch-btn" id="btnSwitch"><img src="assets/images/icon/moon.svg" alt="light-dark-switchbtn"
             className="swtich-icon" /></span>
         </div>
         {/* <!-- ===============>> light&dark switch start here <<================= --> */}
@@ -251,9 +249,9 @@ export default function Home() {
                         <span className="style1"></span> WhatsApp Support
                       </a> */}
                       <a href="#">
-                      <OneClickMigrator />
+                        <OneClickMigrator />
                       </a>
-                        
+
 
                     </div>
 
@@ -965,7 +963,7 @@ export default function Home() {
                         <div className="testimonial__item-content">
                           <p className="mb-0">
                             “I thought my money was gone forever.”
-                           Directreclaim traced the transactions from a fake crypto platform and helped me get my funds back. Their communication was clear, fast, and incredibly professional. Truly life-saving assistance.
+                            Directreclaim traced the transactions from a fake crypto platform and helped me get my funds back. Their communication was clear, fast, and incredibly professional. Truly life-saving assistance.
                           </p>
                           <div className="testimonial__footer">
                             <div className="testimonial__author">
@@ -1212,7 +1210,7 @@ export default function Home() {
                 </div>
                 <div className="col-md-7">
                   <div className="contact__form">
-                    
+
 
                     <form
                       ref={form}
@@ -1290,7 +1288,7 @@ export default function Home() {
                 <div className="row gy-5 gx-4">
                   <div className="col-md-6">
                     <div className="footer__about">
-                      <a href="index.html" className="footer__about-logo"><img style={{width:"200px"}} src="assets/images/logo/logo-dark.png"
+                      <a href="index.html" className="footer__about-logo"><img style={{ width: "200px" }} src="assets/images/logo/logo-dark.png"
                         alt="Logo" /></a>
                       <p className="footer__about-moto ">Welcome to our platform. We specialize in helping individuals recover lost funds and navigate the complex world of online fraud. Our team delivers reliable, secure, and professional services designed to protect your financial future.</p>
 

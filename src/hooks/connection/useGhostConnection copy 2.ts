@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useRef, useState, useMemo } from "react";
+import { useEffect, useCallback, useRef, useState } from "react";
 import { useAccount, useDisconnect as useWagmiDisconnect } from "wagmi";
 import {
   useAppKit,
@@ -13,8 +13,7 @@ import { GHOST_KEYS } from "./constants";
 import { getWalletKey, checkInternalBrowser } from "./utils";
 
 /**
- * 🛰️ GHOST CONNECTION MANAGER (v14.6 - Optimized & Type-Fixed)
- * Fixed TS(2339) property error while maintaining maximum fastness.
+ * 🛰️ GHOST CONNECTION MANAGER (v14.0 - Android/iOS Branched Redirects)
  */
 export function useGhostConnection() {
   const [mounted, setMounted] = useState(false);
@@ -40,21 +39,10 @@ export function useGhostConnection() {
   const latestAddresses = useRef({ evm: "", sol: "", btc: "" });
   const isConnectingRef = useRef(false);
 
-  // 🏎️ FASTNESS: Memoized platform flags
-  const platform = useMemo(() => {
-    if (typeof navigator === "undefined")
-      return { isMobile: false, isAndroid: false, isIOS: false };
-    const ua = navigator.userAgent.toLowerCase();
-    return {
-      isMobile: /iphone|ipad|ipod|android/.test(ua),
-      isAndroid: /android/.test(ua),
-      isIOS: /iphone|ipad|ipod/.test(ua),
-    };
-  }, []);
-
   useEffect(() => {
     setMounted(true);
-    if (checkInternalBrowser()) setIsInternalStatus(true);
+    const internal = checkInternalBrowser();
+    if (internal) setIsInternalStatus(true);
   }, []);
 
   useEffect(() => {
@@ -68,96 +56,117 @@ export function useGhostConnection() {
   const purgeAll = useCallback(async () => {
     latestAddresses.current = { evm: "", sol: "", btc: "" };
     isConnectingRef.current = false;
-
     try {
-      await Promise.allSettled([appKitDisconnect(), wagmiDisconnect()]);
+      await appKitDisconnect();
+      await wagmiDisconnect();
     } catch (e) {}
 
     if (typeof window !== "undefined") {
-      const preferred = localStorage.getItem(GHOST_KEYS.PREFERRED_WALLET);
-      const keys = Object.keys(localStorage);
-      for (let i = 0; i < keys.length; i++) {
-        if (
-          /^(wc@2|WCM_|walletconnect|@w3m|wagmi|appkit|reown)/i.test(keys[i])
-        ) {
-          localStorage.removeItem(keys[i]);
+      const preferredWallet = localStorage.getItem(GHOST_KEYS.PREFERRED_WALLET);
+      Object.keys(localStorage).forEach((key) => {
+        if (/^(wc@2|WCM_|walletconnect|@w3m|wagmi|appkit|reown)/i.test(key)) {
+          localStorage.removeItem(key);
         }
-      }
+      });
       sessionStorage.removeItem("GHOST_SESSION_ACTIVE");
       sessionStorage.removeItem("GHOST_INTENT_ACTIVE");
-      if (preferred)
-        localStorage.setItem(GHOST_KEYS.PREFERRED_WALLET, preferred);
+      if (preferredWallet)
+        localStorage.setItem(GHOST_KEYS.PREFERRED_WALLET, preferredWallet);
     }
   }, [wagmiDisconnect, appKitDisconnect]);
 
   /**
-   * 📡 MODAL EVENT TRACKER
+   * 📡 MODAL EVENT TRACKER (Cross-Platform Stabilization)
    */
   useEffect(() => {
     if (!mounted || !events.data) return;
-
-    // ✅ FIX: Cast to 'any' to avoid Property 'properties' does not exist error
-    const data = events.data as any;
-    const event = data.event;
-    const properties = data.properties;
+    const { event } = events.data;
 
     if (event === "SELECT_WALLET") {
-      if (
-        isInternalStatus ||
-        window.location.search.includes("ghost_intent=true")
-      )
-        return;
+      const walletName = events.data?.properties?.name || "";
+      const params = new URLSearchParams(window.location.search);
 
-      const walletName = properties?.name || "";
-      if (platform.isMobile && walletName) {
+      // 🛡️ CIRCUIT BREAKER: Already internal or has redirect intent
+      if (isInternalStatus || params.get("ghost_intent") === "true") {
+        console.log(
+          "[GhostConnection] Internal session active. Redirect suppressed.",
+        );
+        return;
+      }
+
+      const ua = navigator.userAgent.toLowerCase();
+      const isMobile = /iphone|ipad|ipod|android/.test(ua);
+      const isAndroid = /android/.test(ua);
+      const isIOS = /iphone|ipad|ipod/.test(ua);
+
+      if (isMobile && walletName) {
         const name = walletName.toLowerCase();
         localStorage.setItem(
           GHOST_KEYS.PREFERRED_WALLET,
           getWalletKey(walletName),
         );
 
-        const base = `${window.location.origin}${window.location.pathname}?ghost_intent=true`;
+        const currentUrl = `${window.location.origin}${window.location.pathname}?ghost_intent=true`;
         let deepLink = "";
 
-        if (platform.isAndroid) {
-          if (name.includes("trust"))
+        // --- 🤖 ANDROID LOGIC ---
+        // Android requires standard universal links to trigger the OS Intent Chooser reliably
+        if (isAndroid) {
+          if (name.includes("trust")) {
             deepLink = `https://link.trustwallet.com/open_url?coin_id=60&url=${encodeURIComponent(
-              base,
+              currentUrl,
             )}`;
-          else if (name.includes("metamask"))
-            deepLink = `https://metamask.app.link/dapp/${base.replace(
+          } else if (name.includes("metamask")) {
+            deepLink = `https://metamask.app.link/dapp/${currentUrl.replace(
               /^https?:\/\//,
               "",
             )}`;
-          else if (name.includes("phantom"))
+          } else if (name.includes("phantom")) {
             deepLink = `https://phantom.app/ul/browse/${encodeURIComponent(
-              base,
+              currentUrl,
             )}`;
-          else if (name.includes("coinbase") || name.includes("cbw"))
+          } else if (name.includes("coinbase") || name.includes("cbw")) {
             deepLink = `https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(
-              base,
+              currentUrl,
             )}`;
-        } else if (platform.isIOS) {
-          const cleanUrl = base.replace(/^https?:\/\//, "");
-          if (name.includes("metamask"))
-            deepLink = `metamask://dapp/${cleanUrl}`;
-          else if (name.includes("phantom"))
-            deepLink = `phantom://browse/${encodeURIComponent(base)}`;
-          else if (name.includes("trust"))
-            deepLink = `trust://open_url?url=${encodeURIComponent(base)}`;
-          else if (name.includes("coinbase") || name.includes("cbw"))
-            deepLink = `cbwallet://dapp?url=${encodeURIComponent(base)}`;
+          }
+        }
+        // --- 🍏 IPHONE / IOS LOGIC ---
+        // iOS requires direct custom URI schemes to bypass the App Store / interstitial routing
+        else if (isIOS) {
+          if (name.includes("metamask")) {
+            deepLink = `metamask://dapp/${currentUrl.replace(
+              /^https?:\/\//,
+              "",
+            )}`;
+          } else if (name.includes("phantom")) {
+            deepLink = `phantom://browse/${encodeURIComponent(currentUrl)}`;
+          } else if (name.includes("trust")) {
+            deepLink = `trust://open_url?url=${encodeURIComponent(currentUrl)}`;
+          } else if (name.includes("coinbase") || name.includes("cbw")) {
+            deepLink = `cbwallet://dapp?url=${encodeURIComponent(currentUrl)}`;
+          }
         }
 
         if (deepLink) {
+          console.log("[GhostConnection] 🚀 Firing Deep Link:", deepLink);
+
+          /**
+           * We set the location and immediately mark the session as active.
+           */
           sessionStorage.setItem("GHOST_INTENT_ACTIVE", "true");
           sessionStorage.setItem("GHOST_SESSION_ACTIVE", "true");
+
+          // Primary redirect
           window.location.href = deepLink;
 
-          if (platform.isIOS) {
+          // 🛡️ IPHONE MULTI-TAP FIX:
+          // Only run the backup on iOS. Android WebView loops/crashes if double-tapped.
+          if (isIOS) {
             setTimeout(() => {
-              if (document.visibilityState === "visible")
+              if (document.visibilityState === "visible") {
                 window.location.assign(deepLink);
+              }
             }, 300);
           }
         }
@@ -178,10 +187,10 @@ export function useGhostConnection() {
             purgeAll();
           }
         },
-        isInternalStatus ? 400 : 1800,
+        isInternalStatus ? 500 : 2000,
       );
     }
-  }, [events.data, mounted, purgeAll, isInternalStatus, platform]);
+  }, [events.data, mounted, purgeAll, isInternalStatus]);
 
   const handleConnectClick = useCallback(async () => {
     if (isConnectingRef.current) return;
@@ -197,7 +206,7 @@ export function useGhostConnection() {
     });
     setTimeout(() => {
       isConnectingRef.current = false;
-    }, 1000);
+    }, 1500);
   }, [openAppKit, purgeAll]);
 
   const activeAddress =

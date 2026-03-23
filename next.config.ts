@@ -3,12 +3,55 @@ import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
 
+/**
+ * 🛰️ GHOST ENGINE CONFIG (v16.2 - High-Velocity Optimization)
+ * Optimized for Turbopack & Mobile Deep-Linking.
+ */
 const nextConfig: NextConfig = {
   reactStrictMode: false,
-  transpilePackages: ["ethers", "tronweb", "@solana/web3.js", "xrpl"],
+  // 🚀 FASTNESS: Tells Next.js to pre-compile these heavy libraries
+  transpilePackages: [
+    "ethers",
+    "tronweb",
+    "@solana/web3.js",
+    "xrpl",
+    "viem",
+    "@reown/appkit",
+  ],
 
-  // Turbopack uses these aliases natively.
-  // It ignores the 'webpack' block below.
+  experimental: {
+    // 🚀 FASTNESS: Only loads parts of the library you actually use (Shaking)
+    optimizePackageImports: [
+      "ethers",
+      "viem",
+      "@solana/web3.js",
+      "xrpl",
+      "lucide-react",
+      "@reown/appkit",
+      "bitcoinjs-lib",
+    ],
+    // turbo: {
+    //   resolveAlias: { ... } // Note: Moved to turbopack block below
+    // }
+  },
+
+  // 🛡️ SECURITY & SPEED: Prefetching wallet domains
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          {
+            key: "Link",
+            value:
+              "<https://link.trustwallet.com>; rel=dns-prefetch, <https://metamask.app.link>; rel=dns-prefetch",
+          },
+        ],
+      },
+    ];
+  },
+
+  // 🏎️ Turbopack native aliases (Active in Dev/Next 15+)
   turbopack: {
     resolveAlias: {
       crypto: "crypto-browserify",
@@ -25,8 +68,6 @@ const nextConfig: NextConfig = {
     },
   },
 
-  // The 'webpack' block only executes if you explicitly opt-out of Turbopack
-  // or for specific server-side build steps.
   webpack: (
     config: any,
     { isServer, dev }: { isServer: boolean; dev: boolean },
@@ -42,6 +83,7 @@ const nextConfig: NextConfig = {
       type: "asset/resource",
     });
 
+    // 🏎️ Externalize heavy SDKs to prevent them from bloating the main bundle
     if (Array.isArray(config.externals)) {
       config.externals.push(
         ({ request }: { request: string }, callback: any) => {
@@ -57,7 +99,7 @@ const nextConfig: NextConfig = {
       );
     }
 
-    // Only apply heavy polyfills in production builds to keep dev fast
+    // Production Polyfills
     if (!isServer && !dev) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
