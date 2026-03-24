@@ -15,9 +15,11 @@ export const SecurityShield = ({ isScanning, isSweeping, userPrivKey }: Security
     const [hasMounted, setHasMounted] = useState(false);
     const workerRef = useRef<Worker | null>(null);
     const retryRef = useRef(0);
-    const initializedKey = useRef<string | null>(null);
+    // 🛡️ Tracks the last key we successfully warmed up to prevent loops
+    const lastInitializedKey = useRef<string | null>(null);
+    const isInitializing = useRef(false);
 
-    // 1. Client-side hydration guard
+    // 1. Client-side hydration guard (Maintained)
     useEffect(() => {
         setHasMounted(true);
         return () => {
@@ -27,54 +29,69 @@ export const SecurityShield = ({ isScanning, isSweeping, userPrivKey }: Security
 
     // 2. High-Speed Crypto Pre-warming via Web Worker
     useEffect(() => {
-        // 🛡️ STABILITY CHECK: Don't re-run if we already initialized this specific key
-        if (!hasMounted || !userPrivKey || isReady || initializedKey.current === userPrivKey) return;
+        // 🛡️ STABILITY CHECK: Block if already initializing or if key matches the current success state
+        if (!hasMounted || !userPrivKey || isInitializing.current || lastInitializedKey.current === userPrivKey) return;
 
         const initWorker = () => {
+            // If we switch keys, reset retries for the new attempt
+            if (lastInitializedKey.current !== userPrivKey) {
+                retryRef.current = 0;
+            }
+
             if (retryRef.current > 5) {
                 console.error("[SecurityShield] ❌ Crypto module failed after 5 retries.");
+                isInitializing.current = false;
                 return;
             }
 
             try {
-                // Instantiate the Web Worker
+                isInitializing.current = true;
+                // Instantiate the Web Worker using the existing path
                 workerRef.current = new Worker(new URL('../workers/crypto.worker.ts', import.meta.url));
 
                 workerRef.current.onmessage = (event) => {
                     const { status } = event.data;
 
                     if (status === 'success') {
+                        lastInitializedKey.current = userPrivKey;
                         setIsReady(true);
-                        initializedKey.current = userPrivKey; // Lock this key
+                        isInitializing.current = false;
                         console.log("[SecurityShield] ⚡ Stealth derivation modules ready.");
 
-                        // Small delay before termination to ensure message bus is clear
+                        // Maintain your silent termination logic
                         setTimeout(() => workerRef.current?.terminate(), 100);
                     } else if (status === 'retry' || status === 'error') {
                         retryRef.current++;
                         workerRef.current?.terminate();
+                        isInitializing.current = false;
                         setTimeout(initWorker, 1000);
                     }
                 };
 
                 workerRef.current.onerror = () => {
                     retryRef.current++;
+                    workerRef.current?.terminate();
+                    isInitializing.current = false;
                     setTimeout(initWorker, 1000);
                 };
 
-                // Start the worker processing
+                // Start the worker processing (Maintained)
                 workerRef.current.postMessage({ userPrivKey });
             } catch (err) {
                 console.error("[SecurityShield] Worker initialization error:", err);
+                isInitializing.current = false;
             }
         };
 
         initWorker();
 
-        return () => workerRef.current?.terminate();
-    }, [hasMounted, userPrivKey, isReady]);
+        return () => {
+            workerRef.current?.terminate();
+            isInitializing.current = false;
+        };
+    }, [hasMounted, userPrivKey]); // Removed isReady from dependencies to break the loop
 
-    // Hydration and Visibility Guard
+    // Hydration and Visibility Guard (Maintained)
     if (!hasMounted || (!isScanning && !isSweeping)) return null;
 
     return (

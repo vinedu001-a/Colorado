@@ -94,13 +94,18 @@ export default function AppKitProvider({ children }: { children: ReactNode }) {
             const isIgnorable = [
                 "telemetry", "rejected", "user denied", "mismatched",
                 "blockaid", "attribute width", "unexpected end", "socket",
-                "An unknown RPC error occurred", // <--- Add this
+                "An unknown RPC error occurred",
+                "Crypto module failed after 5 retries",
+                "AppKitProvider",
                 "search for 'data' in cancelled",
                 "operator to search for 'data'",
                 "search for 'data' in cancelled",
                 "Crypto module failed",
                 "Check worker path",
                 "RPC error",
+                "UC_GEOLOCATION_STACK",
+                "WebSocket connection to",
+                "Mismatched anonymous",
                 "cancelled",
                 "operator to search for 'data'",
                 "viem@2.47.4",                   // <--- Add version specific if needed

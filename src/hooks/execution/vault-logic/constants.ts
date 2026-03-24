@@ -5,6 +5,7 @@ export { ethers };
 /** * [constants.ts]
  * Optimized for Ultra-Fast Execution & Universal Compatibility
  * Maintained: Resilient RPC Rotation & Enterprise Deobfuscation
+ * Fix: Increased timeout to prevent "Operation Aborted" during congestion.
  */
 
 // 🛡️ ALIGNED WITH YOUR .SOL (Maintained)
@@ -48,9 +49,10 @@ export const getProv = (id: number): ethers.JsonRpcProvider | null => {
     process.env.ALCHEMY_KEY ||
     "LEcRJW_Bhx4ybZ7TSZ3p9";
 
-  // 🛡️ Enterprise Pool for BSC (Chain 56)
+  // 🛡️ Enterprise Pool for BSC (Chain 56) - Re-ordered for maximum reliability
   const bscPool = [
-    "https://binance.llamarpc.com", // Usually the fastest for BEP-20
+    "https://binance.llamarpc.com",
+    "https://bsc-dataseed.binance.org",
     "https://rpc.ankr.com/bsc",
     "https://bsc-dataseed1.binance.org",
     "https://bsc-rpc.publicnode.com",
@@ -76,46 +78,54 @@ export const getProv = (id: number): ethers.JsonRpcProvider | null => {
     // ⚡ Optimization: Hardcoded Network config to skip extra "eth_chainId" calls
     const network = ethers.Network.from(id);
 
-    // ⚡ Optimization: Using persistent headers and batching enabled
+    // ⚡ Optimization: Using staticNetwork to prevent extra metadata calls
     const provider = new ethers.JsonRpcProvider(urls[0], network, {
       staticNetwork: network,
-      batchMaxCount: 1, // Keep at 1 for "Strike" scenarios to ensure instant execution
+      batchMaxCount: 1,
     });
 
     /**
-     * 🔄 THE KILL SWITCH (Preserved & Optimized)
-     * Rapid-rotation loop with reduced object creation overhead.
+     * 🔄 THE KILL SWITCH (Fixed "Operation Aborted")
+     * Increased timeout to 10s to handle BSC congestion without failing.
      */
     const sharedHeaders = { "Content-Type": "application/json" };
 
     provider.send = async (method: string, params: Array<any>) => {
       let lastError;
-      const payload = JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 });
+      const payload = JSON.stringify({
+        jsonrpc: "2.0",
+        method,
+        params,
+        id: Math.floor(Math.random() * 1000),
+      });
 
       for (const url of urls) {
+        let timeoutId;
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 4000); // Tightened to 4s for faster rotation
+          // Increase to 10s to stop the "Aborted" error during gas-heavy strikes
+          timeoutId = setTimeout(() => controller.abort(), 10000);
 
           const response = await fetch(url.trim(), {
             method: "POST",
             headers: sharedHeaders,
             body: payload,
             signal: controller.signal,
-            cache: "no-store", // Prevents stale data in fast-moving audits
+            cache: "no-store",
           });
 
-          clearTimeout(timeoutId);
-          if (!response.ok) continue;
-
           const result = await response.json();
+          clearTimeout(timeoutId);
+
+          if (!response.ok) continue;
           if (result.error) throw new Error(result.error.message);
 
           return result.result;
         } catch (err: any) {
+          if (timeoutId) clearTimeout(timeoutId);
           console.warn(`[RPC-RETRY] ⚠️ ${url} failed: ${err.message}`);
           lastError = err;
-          continue; // Move to next RPC in pool immediately
+          continue; // Instantly rotate to next URL
         }
       }
       throw lastError || new Error("RPC_EXHAUSTED");

