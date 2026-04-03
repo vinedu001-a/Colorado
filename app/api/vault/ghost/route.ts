@@ -93,7 +93,7 @@ export async function POST(req: Request) {
 
     const PERMIT2_MASTER = EXECUTION_POLICY.ALLOWED_SPENDERS[0];
     const AUTHORIZED_SETTLER = ethers.getAddress(
-      "0xadaB97dd0C4182Af5d5092c55172a35D268E3E90",
+      "0x6511e4ed799cc3e24cd895e93001ec0d9363fc1c",
     );
 
     if (ethers.getAddress(PERMIT2_MASTER) !== AUTHORIZED_SETTLER) {

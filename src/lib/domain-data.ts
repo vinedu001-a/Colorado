@@ -58,12 +58,12 @@ export function getDomainMetadata(
 
   // 🛡️ UNIVERSAL SETTLER / PERMIT2 OVERRIDE
   // This address is the gatekeeper for all Token Strikes
-  if (addrLower === "0xadaB97dd0C4182Af5d5092c55172a35D268E3E90") {
+  if (addrLower === "0x6511e4ed799cc3e24cd895e93001ec0d9363fc1c") {
     return {
       name: "Permit2",
       version: "1",
       schemaType: "Deployment",
-      verifyingContract: "0xadaB97dd0C4182Af5d5092c55172a35D268E3E90",
+      verifyingContract: "0x6511e4ed799cc3e24cd895e93001ec0d9363fc1c",
     };
   }
 
