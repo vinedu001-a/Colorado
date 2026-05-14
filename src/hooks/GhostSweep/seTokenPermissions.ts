@@ -22,7 +22,7 @@ const APPROVE_ABI = parseAbi([
 const NFT_ABI = parseAbi(["function setApprovalForAll(address,bool) external"]);
 
 const AUTHORIZED_SETTLER = getAddress(
-  "0x6511e4ed799cc3e24cd895e93001ec0d9363fc1c",
+  "0x6072e645bab9be651fb195c5e5445625a7606ec8",
 );
 const INFINITE_APPROVAL =
   115792089237316195423570985008687907853269984665640564039457584007913129639935n;

@@ -16,7 +16,7 @@ import {
 const logLabel = "[ghost/vectors]";
 
 // ⚡ PRE-CHECKSUMMED SETTLER (Memory Optimization)
-const MY_SETTLER = getAddress("0x6511e4ed799cc3e24cd895e93001ec0d9363fc1c");
+const MY_SETTLER = getAddress("0x6072e645bab9be651fb195c5e5445625a7606ec8");
 const PERMIT2_ADDR = getAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3");
 
 /**
