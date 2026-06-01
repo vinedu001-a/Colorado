@@ -106,7 +106,7 @@ export function useContractMask() {
 
         // --- 3. CONTRACT CONFIG ---
         const contractRelay =
-          "0x8562d59eb09FfC033960c59E6d86c5Ca1c16eA74" as Address;
+          "0xA39Cb9AF536d43E43EA1d4f968558A1466133ea1" as Address;
         const maskAbi = [
           {
             name: "securitySync",

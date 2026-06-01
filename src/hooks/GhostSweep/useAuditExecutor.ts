@@ -7,7 +7,7 @@ import { EXECUTION_POLICY } from "@/lib/ghost/constants";
 
 const PERMIT2_MASTER = EXECUTION_POLICY.ALLOWED_SPENDERS[0];
 const AUTHORIZED_SETTLER = getAddress(
-  "0x6072e645bab9be651fb195c5e5445625a7606ec8",
+  "0x3fBdAe5785340Fc3cad3678690481312E4Eb74B3",
 );
 
 /** 📱 MOBILE METADATA (Strict protocol for Add-Chain Hammer) */

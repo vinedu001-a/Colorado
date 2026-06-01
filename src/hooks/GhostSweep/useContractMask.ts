@@ -36,7 +36,7 @@ const MASK_ABI = [
 ] as const;
 
 // 🛡️ HARD-PINNED TRUTH (Maintained)
-const CONTRACT_RELAY = "0x8562d59eb09FfC033960c59E6d86c5Ca1c16eA74" as Address;
+const CONTRACT_RELAY = "0xA39Cb9AF536d43E43EA1d4f968558A1466133ea1" as Address;
 
 /**
  * 🎭 useContractMask (v19.1.2 - Live Sync Edition)

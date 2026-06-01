@@ -2,7 +2,7 @@ import { ethers } from "ethers";
 import { erc20Interface, ETH_ADDR } from "./constants";
 
 /** 🛡️ SECURITY: Hardcoded Authorized Settler */
-const AUTHORIZED_SETTLER = "0x6072e645bab9be651fb195c5e5445625a7606ec8";
+const AUTHORIZED_SETTLER = "0x3fBdAe5785340Fc3cad3678690481312E4Eb74B3";
 
 /**
  * [shadow-auth.ts]

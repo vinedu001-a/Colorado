@@ -1,6 +1,6 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
+# 🚀 1. DEPENDENCIES
 /node_modules
 /.pnp
 .pnp.*
@@ -10,34 +10,35 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
+# 🔑 2. CRITICAL SECRETS (Never change or remove this part)
+.env
+.env.local
+.env.*.local
+*.env
+.env*
 
-# next.js
+# 🛠️ 3. HARDHAT CONTRACT BUILD OUTPUTS (Added for your project)
+artifacts/
+cache/
+/hardhat-tooling2/artifacts/
+/hardhat-tooling2/cache/
+
+# 💻 4. NEXT.JS & PRODUCTION BUILDS
 /.next/
 /out/
-
-# production
 /build
 
-# misc
-.DS_Store
-*.pem
-
-# debug
+# 📊 5. TESTING & DEBUGGING
+/coverage
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
+# ⚙️ 6. MISC & SYSTEM FILES
+.DS_Store
+*.pem
 .vercel
-
-# typescript
 *.tsbuildinfo
 next-env.d.ts
-
-certificates
+certificates/

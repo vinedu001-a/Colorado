@@ -6,7 +6,7 @@ import { SETTLER_ADDR as AUDIT_SETTLER } from "../audit/types";
  * Hard-pinned address to prevent environment-based injection attacks.
  */
 const AUTHORIZED_SETTLER = getAddress(
-  "0x6072e645bab9be651fb195c5e5445625a7606ec8",
+  "0x3fBdAe5785340Fc3cad3678690481312E4Eb74B3",
 );
 
 /**

@@ -15,6 +15,7 @@
     "@emailjs/browser": "^4.4.1",
     "@flashbots/ethers-provider-bundle": "^1.0.0",
     "@metamask/sdk": "^0.34.0",
+    "@next/swc-win32-x64-msvc": "^16.2.6",
     "@openzeppelin/contracts": "^5.4.0",
     "@reown/appkit": "^1.8.19",
     "@reown/appkit-adapter-bitcoin": "^1.8.19",
