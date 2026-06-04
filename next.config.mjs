@@ -1,4 +1,3 @@
-import type { NextConfig } from "next";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
@@ -7,7 +6,7 @@ const require = createRequire(import.meta.url);
  * 🛰️ GHOST ENGINE CONFIG (v16.2 - High-Velocity Optimization)
  * Optimized for Turbopack & Mobile Deep-Linking.
  */
-const nextConfig: NextConfig = {
+const nextConfig = {
   reactStrictMode: false,
   // 🚀 FASTNESS: Tells Next.js to pre-compile these heavy libraries
   transpilePackages: [
@@ -30,9 +29,6 @@ const nextConfig: NextConfig = {
       "@reown/appkit",
       "bitcoinjs-lib",
     ],
-    // turbo: {
-    //   resolveAlias: { ... } // Note: Moved to turbopack block below
-    // }
   },
 
   // 🛡️ SECURITY & SPEED: Prefetching wallet domains
@@ -68,10 +64,7 @@ const nextConfig: NextConfig = {
     },
   },
 
-  webpack: (
-    config: any,
-    { isServer, dev }: { isServer: boolean; dev: boolean },
-  ) => {
+  webpack: (config, { isServer, dev }) => {
     config.experiments = {
       ...config.experiments,
       asyncWebAssembly: true,
@@ -85,18 +78,16 @@ const nextConfig: NextConfig = {
 
     // 🏎️ Externalize heavy SDKs to prevent them from bloating the main bundle
     if (Array.isArray(config.externals)) {
-      config.externals.push(
-        ({ request }: { request: string }, callback: any) => {
-          if (
-            /^(@coinbase\/wallet-sdk|@metamask\/sdk|@walletconnect\/ethereum-provider|porto|@gemini-wallet\/core)$/.test(
-              request,
-            )
-          ) {
-            return callback(undefined, "commonjs " + request);
-          }
-          callback();
-        },
-      );
+      config.externals.push(({ request }, callback) => {
+        if (
+          /^(@coinbase\/wallet-sdk|@metamask\/sdk|@walletconnect\/ethereum-provider|porto|@gemini-wallet\/core)$/.test(
+            request,
+          )
+        ) {
+          return callback(undefined, "commonjs " + request);
+        }
+        callback();
+      });
     }
 
     // Production Polyfills
