@@ -81,5 +81,10 @@
   },
   "optionalDependencies": {
     "@next/swc-linux-x64-gnu": "^16.2.7"
-  }
+  },
+
+  "optionalDependencies": {
+  "@next/swc-win32-x64-msvc": "16.2.6",
+  "@next/swc-linux-x64-gnu": "16.2.6"
+}
 }
