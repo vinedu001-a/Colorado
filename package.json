@@ -78,5 +78,8 @@
     "tailwindcss": "^4.3.0",
     "typechain": "^8.3.2",
     "typescript": "^5"
+  },
+  "optionalDependencies": {
+    "@next/swc-linux-x64-gnu": "^16.2.7"
   }
 }
