@@ -43,6 +43,7 @@
     "os-browserify": "^0.3.0",
     "path-browserify": "^1.0.1",
     "porto": "^0.2.37",
+    "postcss": "^8.5.15",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "stream-browserify": "^3.0.0",
@@ -62,7 +63,7 @@
     "@nomicfoundation/hardhat-network-helpers": "^3.0.3",
     "@nomicfoundation/hardhat-toolbox": "^6.1.0",
     "@nomicfoundation/hardhat-verify": "^3.0.9",
-    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/postcss": "^4.3.0",
     "@typechain/ethers-v6": "^0.5.1",
     "@typechain/hardhat": "^9.1.0",
     "@types/chai": "^5.2.3",
@@ -74,7 +75,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "hardhat": "^3.1.7",
-    "tailwindcss": "^4",
+    "tailwindcss": "^4.3.0",
     "typechain": "^8.3.2",
     "typescript": "^5"
   }
