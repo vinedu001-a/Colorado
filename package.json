@@ -54,7 +54,8 @@
     "url": "^0.11.4",
     "viem": "2.x",
     "wagmi": "^3.5.0",
-    "xrpl": "^4.6.0"
+    "xrpl": "^4.6.0", 
+    "tailwindcss": "^4.0.0"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
@@ -82,4 +83,5 @@
     "@next/swc-linux-x64-gnu": "16.2.6",
     "@next/swc-win32-x64-msvc": "16.2.6"
   }
+
 }
