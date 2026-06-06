@@ -16,12 +16,6 @@ body {
 }
 
 
-
-
-  
-
-
-
 /* --- THE FIX FOR THE "DARK EFFECT" --- */
 /* This ensures the Reown modal sits on top of everything and isn't transparent */
 w3m-modal {
@@ -57,12 +51,10 @@ w3m-modal {
   animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-@layer base {
-  /* This ensures the Reown modal is never swallowed by Tailwind's stacking context */
-  w3m-modal {
-    position: fixed !important;
-    z-index: 999999 !important;
-  }
+/* This ensures the Reown modal is never swallowed by Tailwind's stacking context */
+w3m-modal {
+  position: fixed !important;
+  z-index: 999999 !important;
 }
 
 wui-ux-by-reown, 
