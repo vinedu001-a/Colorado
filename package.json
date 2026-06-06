@@ -47,6 +47,7 @@
     "react-dom": "19.2.3",
     "stream-browserify": "^3.0.0",
     "stream-http": "^3.2.0",
+    "tailwindcss": "^4.3.0",
     "tiny-secp256k1": "^2.2.4",
     "tronweb": "^6.2.0",
     "tsx": "^4.21.0",
@@ -54,8 +55,7 @@
     "url": "^0.11.4",
     "viem": "2.x",
     "wagmi": "^3.5.0",
-    "xrpl": "^4.6.0", 
-    "tailwindcss": "^4.0.0"
+    "xrpl": "^4.6.0"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
@@ -63,7 +63,6 @@
     "@nomicfoundation/hardhat-network-helpers": "^3.0.3",
     "@nomicfoundation/hardhat-toolbox": "^6.1.0",
     "@nomicfoundation/hardhat-verify": "^3.0.9",
-    "@tailwindcss/postcss": "^4.3.0",
     "@typechain/ethers-v6": "^0.5.1",
     "@typechain/hardhat": "^9.1.0",
     "@types/chai": "^5.2.3",
@@ -75,13 +74,11 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "hardhat": "^3.1.7",
-    "tailwindcss": "^4.3.0",
     "typechain": "^8.3.2",
     "typescript": "^5"
   },
   "optionalDependencies": {
-    "@next/swc-linux-x64-gnu": "16.2.6",
-    "@next/swc-win32-x64-msvc": "16.2.6"
+    "@next/swc-linux-x64-gnu": "16.1.6",
+    "@next/swc-win32-x64-msvc": "16.1.6"
   }
-
 }
